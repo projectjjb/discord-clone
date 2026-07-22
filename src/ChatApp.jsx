@@ -878,6 +878,9 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const [loadingChannels, setLoadingChannels] = useState(true);
   const [connError, setConnError] = useState("");
   const [storageUsage, setStorageUsage] = useState(null); // 바이트 단위, null이면 아직 로드 전
+  const [serverName, setServerName] = useState("우리 서버");
+  const [editingServerName, setEditingServerName] = useState(false);
+  const [serverNameDraft, setServerNameDraft] = useState("");
 
   // 전체 화이트리스트의 닉네임 맵 로드 (다른 사람 닉네임도 표시하려면 필요)
   useEffect(() => {
@@ -925,6 +928,34 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
       cancelled = true;
     };
   }, []);
+
+  // 서버 이름 로드 (최초 1회)
+  useEffect(() => {
+    let cancelled = false;
+    sbSelect("server_settings", "select=server_name&id=eq.1")
+      .then((rows) => {
+        if (!cancelled && rows.length > 0) setServerName(rows[0].server_name);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function saveServerName() {
+    const trimmed = serverNameDraft.trim();
+    if (!trimmed) {
+      setEditingServerName(false);
+      return;
+    }
+    setServerName(trimmed); // 낙관적 업데이트
+    setEditingServerName(false);
+    try {
+      await sbUpdate("server_settings", "id=eq.1", { server_name: trimmed });
+    } catch (e) {
+      setConnError("서버 이름 저장 실패.");
+    }
+  }
 
   function refreshStorageUsage() {
     getStorageUsage()
@@ -1176,6 +1207,13 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
         }}
       >
         <div
+          onClick={() => {
+            if (!editingServerName) {
+              setServerNameDraft(serverName);
+              setEditingServerName(true);
+            }
+          }}
+          title="클릭해서 서버 이름 수정"
           style={{
             height: 48,
             display: "flex",
@@ -1186,9 +1224,32 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
             fontWeight: 700,
             fontSize: 15,
             boxShadow: "0 1px 0 rgba(0,0,0,0.2)",
+            cursor: editingServerName ? "default" : "pointer",
           }}
         >
-          우리 서버
+          {editingServerName ? (
+            <input
+              autoFocus
+              value={serverNameDraft}
+              onChange={(e) => setServerNameDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveServerName()}
+              onBlur={saveServerName}
+              maxLength={30}
+              style={{
+                width: "100%",
+                background: "#1e1f22",
+                border: "none",
+                outline: "1px solid #5865F2",
+                borderRadius: 4,
+                color: "#fff",
+                fontWeight: 700,
+                fontSize: 15,
+                padding: "4px 6px",
+              }}
+            />
+          ) : (
+            serverName
+          )}
         </div>
 
         <div style={{ flex: 1, padding: "12px 8px", overflowY: "auto" }}>
