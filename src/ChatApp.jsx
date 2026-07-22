@@ -61,7 +61,54 @@ async function sbUpdate(table, filterQuery, body) {
     const err = await res.text().catch(() => "");
     throw new Error(`${table} 업데이트 실패: ${res.status} ${err}`);
   }
-  return res.json();
+  const rows = await res.json();
+  // RLS 정책 때문에 0개 행이 수정되면 에러 없이 빈 배열이 오므로 직접 감지
+  if (Array.isArray(rows) && rows.length === 0) {
+    throw new Error(`${table} 업데이트가 적용되지 않았습니다 (권한 정책 확인 필요)`);
+  }
+  return rows;
+}
+
+// 화이트리스트(프로필) 변경을 실시간으로 구독
+function subscribeToProfiles(onChange) {
+  const wsUrl =
+    SUPABASE_URL.replace("https://", "wss://") +
+    `/realtime/v1/websocket?apikey=${SUPABASE_ANON_KEY}&vsn=1.0.0`;
+  const ws = new WebSocket(wsUrl);
+  let ref = 1;
+
+  ws.onopen = () => {
+    ws.send(
+      JSON.stringify({
+        topic: "realtime:public:whitelist",
+        event: "phx_join",
+        payload: {},
+        ref: ref++,
+      })
+    );
+    const heartbeat = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ topic: "phoenix", event: "heartbeat", payload: {}, ref: ref++ }));
+      }
+    }, 25000);
+    ws._heartbeat = heartbeat;
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if ((msg.event === "UPDATE" || msg.event === "INSERT") && msg.payload?.record) {
+        onChange(msg.payload.record);
+      }
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  return () => {
+    clearInterval(ws._heartbeat);
+    ws.close();
+  };
 }
 
 function subscribeToMessages(onInsert, onUpdate, onDelete) {
@@ -949,8 +996,22 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
 
   useEffect(() => {
     refreshProfiles();
-    const interval = setInterval(refreshProfiles, 20000); // 20초마다 갱신
-    return () => clearInterval(interval);
+    // 실시간 구독: 누군가 닉네임/색상을 바꾸면 즉시 반영
+    const unsubscribe = subscribeToProfiles((record) => {
+      setProfileMap((prev) => ({
+        ...prev,
+        [record.name]: { nickname: record.nickname, avatar_color: record.avatar_color },
+      }));
+      if (record.name === currentUser && record.avatar_color) {
+        setMyColor(record.avatar_color);
+      }
+    });
+    // 실시간 연결이 끊겼을 때를 대비한 백업 폴링
+    const interval = setInterval(refreshProfiles, 30000);
+    return () => {
+      unsubscribe();
+      clearInterval(interval);
+    };
   }, [currentUser]);
 
   function displayName(originalName) {
@@ -1203,7 +1264,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
       }));
       return true;
     } catch (e) {
-      setConnError("프로필 저장 실패. 다시 시도해주세요.");
+      setConnError(`프로필 저장 실패: ${e.message}`);
       return false;
     }
   }
