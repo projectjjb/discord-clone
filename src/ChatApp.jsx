@@ -38,7 +38,33 @@ async function sbInsert(table, body) {
   return res.json();
 }
 
-function subscribeToMessages(onInsert) {
+async function sbDelete(table, filterQuery) {
+  const url = `${SUPABASE_URL}/rest/v1/${table}?apikey=${SUPABASE_ANON_KEY}&${filterQuery}`;
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: SB_HEADERS,
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    throw new Error(`${table} 삭제 실패: ${res.status} ${err}`);
+  }
+}
+
+async function sbUpdate(table, filterQuery, body) {
+  const url = `${SUPABASE_URL}/rest/v1/${table}?apikey=${SUPABASE_ANON_KEY}&${filterQuery}`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { ...SB_HEADERS, Prefer: "return=representation" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    throw new Error(`${table} 업데이트 실패: ${res.status} ${err}`);
+  }
+  return res.json();
+}
+
+function subscribeToMessages(onInsert, onUpdate, onDelete) {
   const wsUrl =
     SUPABASE_URL.replace("https://", "wss://") +
     `/realtime/v1/websocket?apikey=${SUPABASE_ANON_KEY}&vsn=1.0.0`;
@@ -67,6 +93,10 @@ function subscribeToMessages(onInsert) {
       const msg = JSON.parse(event.data);
       if (msg.event === "INSERT" && msg.payload?.record) {
         onInsert(msg.payload.record);
+      } else if (msg.event === "UPDATE" && msg.payload?.record) {
+        onUpdate?.(msg.payload.record);
+      } else if (msg.event === "DELETE" && msg.payload?.old_record) {
+        onDelete?.(msg.payload.old_record);
       }
     } catch (e) {
       // ignore
@@ -77,6 +107,44 @@ function subscribeToMessages(onInsert) {
     clearInterval(ws._heartbeat);
     ws.close();
   };
+}
+
+// 이미지를 Supabase Storage(chat-images 버킷)에 업로드하고 공개 URL을 반환
+async function uploadImage(file) {
+  const ext = file.name.split(".").pop() || "png";
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  const url = `${SUPABASE_URL}/storage/v1/object/chat-images/${path}`;
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      "Content-Type": file.type || "application/octet-stream",
+    },
+    body: file,
+  });
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    throw new Error(`이미지 업로드 실패: ${res.status} ${err}`);
+  }
+
+  return `${SUPABASE_URL}/storage/v1/object/public/chat-images/${path}`;
+}
+
+// 이미지 파일 유효성 검사 (용량/타입 제한)
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8MB
+const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+function validateImageFile(file) {
+  if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+    return "지원하지 않는 파일 형식입니다 (PNG, JPG, GIF, WEBP만 가능)";
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    return "파일이 너무 큽니다 (최대 8MB)";
+  }
+  return null;
 }
 
 // ---------- 데이터 ----------
@@ -94,6 +162,69 @@ function randomCode() {
 
 function initials(name) {
   return name?.trim()?.[0]?.toUpperCase() || "?";
+}
+
+// ---------- 이모지 리액션 ----------
+const EMOJI_CHOICES = ["👍", "❤️", "😂", "😮", "😢", "🔥", "🎉", "👀","🤔"];
+
+function EmojiPicker({ onPick, onClose }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        position: "absolute",
+        bottom: "100%",
+        marginBottom: 6,
+        background: "#2b2d31",
+        borderRadius: 8,
+        padding: 8,
+        display: "flex",
+        gap: 4,
+        boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+        zIndex: 30,
+      }}
+    >
+      {EMOJI_CHOICES.map((emoji) => (
+        <button
+          key={emoji}
+          onClick={() => onPick(emoji)}
+          style={{
+            background: "transparent",
+            border: "none",
+            fontSize: 18,
+            cursor: "pointer",
+            padding: 4,
+            borderRadius: 4,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "#3f4147")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          {emoji}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// 리액션 집계: [{emoji, count, reactedByMe}] 형태로 변환
+function summarizeReactions(reactions, currentUser) {
+  if (!reactions || typeof reactions !== "object") return [];
+  return Object.entries(reactions)
+    .map(([emoji, users]) => ({
+      emoji,
+      count: Array.isArray(users) ? users.length : 0,
+      reactedByMe: Array.isArray(users) && users.includes(currentUser),
+    }))
+    .filter((r) => r.count > 0);
 }
 
 function avatarColor(seed) {
@@ -280,6 +411,133 @@ function KilledScreen() {
   );
 }
 
+// ---------- 프로필 / 닉네임 설정 ----------
+function ProfileModal({ currentUser, nickname, onSave, onClose }) {
+  const [value, setValue] = useState(nickname || "");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    setSaved(false);
+    const ok = await onSave(value);
+    setSaving(false);
+    if (ok) {
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 60,
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+      }}
+    >
+      <div
+        style={{
+          background: "#313338",
+          borderRadius: 8,
+          width: 420,
+          maxWidth: "90vw",
+          padding: "28px 26px",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+          <div
+            style={{
+              width: 56,
+              height: 56,
+              borderRadius: "50%",
+              background: avatarColor(currentUser),
+              color: "#fff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: 700,
+              fontSize: 20,
+              flexShrink: 0,
+            }}
+          >
+            {initials(value || currentUser)}
+          </div>
+          <div>
+            <div style={{ color: "#fff", fontSize: 18, fontWeight: 700 }}>
+              {value || currentUser}
+            </div>
+            <div style={{ color: "#949ba4", fontSize: 13 }}>@{currentUser}</div>
+          </div>
+        </div>
+
+        <label style={{ color: "#b5bac1", fontSize: 12, fontWeight: 700, textTransform: "uppercase" }}>
+          닉네임
+        </label>
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleSave()}
+          placeholder={currentUser}
+          maxLength={20}
+          style={{
+            width: "100%",
+            marginTop: 6,
+            padding: "10px 12px",
+            borderRadius: 4,
+            border: "none",
+            outline: "none",
+            background: "#1e1f22",
+            color: "#fff",
+            fontSize: 15,
+            boxSizing: "border-box",
+          }}
+        />
+        <div style={{ color: "#949ba4", fontSize: 12, marginTop: 6 }}>
+          채팅에는 닉네임이 표시되고, 원래 이름(@{currentUser})은 프로필에서만 보여요. 비워두면 원래 이름이 그대로 표시돼요.
+        </div>
+
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          style={{
+            width: "100%",
+            marginTop: 18,
+            padding: "11px 0",
+            borderRadius: 4,
+            border: "none",
+            background: saving ? "#454a52" : "#5865F2",
+            color: "#fff",
+            fontWeight: 600,
+            fontSize: 15,
+            cursor: saving ? "default" : "pointer",
+          }}
+        >
+          {saving ? "저장 중..." : saved ? "저장됨 ✓" : "닉네임 저장"}
+        </button>
+        <div
+          onClick={onClose}
+          style={{
+            textAlign: "center",
+            marginTop: 14,
+            color: "#7f8489",
+            fontSize: 13,
+            cursor: "pointer",
+          }}
+        >
+          닫기
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------- 관리자: 화이트리스트 패널 ----------
 function AdminPanel({ onClose }) {
   const [name, setName] = useState("");
@@ -290,7 +548,7 @@ function AdminPanel({ onClose }) {
 
   useEffect(() => {
     let cancelled = false;
-    sbSelect("whitelist", "select=id,name,code&order=id.desc")
+    sbSelect("whitelist", "select=id,name,code,nickname&order=id.desc")
       .then((rows) => {
         if (!cancelled) setWhitelist(rows);
       })
@@ -412,7 +670,12 @@ function AdminPanel({ onClose }) {
               }}
             >
               <div>
-                <div style={{ color: "#fff", fontSize: 14, fontWeight: 600 }}>{u.name}</div>
+                <div style={{ color: "#fff", fontSize: 14, fontWeight: 600 }}>
+                  {u.name}
+                  {u.nickname && (
+                    <span style={{ color: "#949ba4", fontWeight: 400 }}> ({u.nickname})</span>
+                  )}
+                </div>
                 <div style={{ color: "#949ba4", fontSize: 12, marginTop: 2, fontFamily: "monospace" }}>
                   {u.code}
                 </div>
@@ -467,16 +730,47 @@ function formatTime(iso) {
 }
 
 // ---------- 메인 디스코드 스타일 채팅 ----------
-function ChatMain({ currentUser, isAdmin }) {
+function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmin }) {
   const [channels, setChannels] = useState([]);
   const [activeChannel, setActiveChannel] = useState(null);
   const [showAdmin, setShowAdmin] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
+  const [nicknameMap, setNicknameMap] = useState({}); // { 원래이름: 닉네임 }
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
   const [loadingChannels, setLoadingChannels] = useState(true);
   const [connError, setConnError] = useState("");
 
+  // 전체 화이트리스트의 닉네임 맵 로드 (다른 사람 닉네임도 표시하려면 필요)
+  useEffect(() => {
+    let cancelled = false;
+    sbSelect("whitelist", "select=name,nickname")
+      .then((rows) => {
+        if (cancelled) return;
+        const map = {};
+        rows.forEach((r) => {
+          if (r.nickname) map[r.name] = r.nickname;
+        });
+        setNicknameMap(map);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function displayName(originalName) {
+    return nicknameMap[originalName] || originalName;
+  }
+
+  const [pendingImage, setPendingImage] = useState(null); // { file, previewUrl }
+  const [uploading, setUploading] = useState(false);
+  const [openPickerFor, setOpenPickerFor] = useState(null); // 이모지 피커가 열린 메시지 id
+  const [hoveredMsg, setHoveredMsg] = useState(null);
+  const [showInputEmojiPicker, setShowInputEmojiPicker] = useState(false);
+
   const bottomRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // 채널 목록 로드 (최초 1회)
   useEffect(() => {
@@ -500,7 +794,7 @@ function ChatMain({ currentUser, isAdmin }) {
     let cancelled = false;
     sbSelect(
       "messages",
-      `channel_id=eq.${activeChannel}&select=id,author,text,created_at&order=created_at.asc`
+      `channel_id=eq.${activeChannel}&select=id,author,text,image_url,reactions,created_at&order=created_at.asc`
     )
       .then((rows) => {
         if (!cancelled) setMessages(rows);
@@ -513,13 +807,23 @@ function ChatMain({ currentUser, isAdmin }) {
 
   // 새 메시지 실시간 구독 (전체 messages 테이블, 현재 채널만 필터링해 반영)
   useEffect(() => {
-    const unsubscribe = subscribeToMessages((record) => {
-      setMessages((prev) => {
-        if (record.channel_id !== activeChannel) return prev;
-        if (prev.some((m) => m.id === record.id)) return prev; // 중복 방지(내가 보낸 것 이미 반영된 경우)
-        return [...prev, record];
-      });
-    });
+    const unsubscribe = subscribeToMessages(
+      (record) => {
+        setMessages((prev) => {
+          if (record.channel_id !== activeChannel) return prev;
+          if (prev.some((m) => m.id === record.id)) return prev; // 중복 방지(내가 보낸 것 이미 반영된 경우)
+          return [...prev, record];
+        });
+      },
+      (record) => {
+        // 리액션 변경 등 업데이트 반영
+        setMessages((prev) => prev.map((m) => (m.id === record.id ? { ...m, ...record } : m)));
+      },
+      (oldRecord) => {
+        // 삭제 반영
+        setMessages((prev) => prev.filter((m) => m.id !== oldRecord.id));
+      }
+    );
     return unsubscribe;
   }, [activeChannel]);
 
@@ -527,34 +831,134 @@ function ChatMain({ currentUser, isAdmin }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // 이미지 정리 (미리보기 URL 메모리 해제)
+  useEffect(() => {
+    return () => {
+      if (pendingImage?.previewUrl) URL.revokeObjectURL(pendingImage.previewUrl);
+    };
+  }, [pendingImage]);
+
+  function handleFileSelect(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // 같은 파일 다시 선택 가능하도록 초기화
+    if (!file) return;
+    const err = validateImageFile(file);
+    if (err) {
+      setConnError(err);
+      return;
+    }
+    setConnError("");
+    setPendingImage({ file, previewUrl: URL.createObjectURL(file) });
+  }
+
+  function cancelPendingImage() {
+    if (pendingImage?.previewUrl) URL.revokeObjectURL(pendingImage.previewUrl);
+    setPendingImage(null);
+  }
+
   async function sendMessage() {
     const text = input.trim();
-    if (!text || activeChannel == null) return;
+    if ((!text && !pendingImage) || activeChannel == null || uploading) return;
+
+    let imageUrl = null;
+    const imageToSend = pendingImage;
     setInput("");
-    // 낙관적 업데이트: 내 화면엔 바로 표시
+    setPendingImage(null);
+
+    // 낙관적 업데이트: 내 화면엔 바로 표시 (이미지는 로컬 미리보기 사용)
     const tempId = `temp-${Date.now()}`;
     const optimistic = {
       id: tempId,
       author: currentUser,
       text,
+      image_url: imageToSend?.previewUrl || null,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, optimistic]);
+
     try {
+      if (imageToSend) {
+        setUploading(true);
+        imageUrl = await uploadImage(imageToSend.file);
+      }
       const [saved] = await sbInsert("messages", {
         channel_id: activeChannel,
         author: currentUser,
-        text,
+        text: text || "",
+        image_url: imageUrl,
       });
-      // 서버가 준 실제 row로 교체 (id 등 확정)
       setMessages((prev) => prev.map((m) => (m.id === tempId ? saved : m)));
     } catch (e) {
-      setConnError("메시지 전송 실패. 다시 시도해주세요.");
+      setConnError(e.message || "메시지 전송 실패. 다시 시도해주세요.");
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
+    } finally {
+      setUploading(false);
+      if (imageToSend?.previewUrl) URL.revokeObjectURL(imageToSend.previewUrl);
     }
   }
 
   const channelName = channels.find((c) => c.id === activeChannel)?.name || "";
+
+  async function deleteMessage(msg) {
+    if (!window.confirm("이 메시지를 삭제할까요?")) return;
+    // 낙관적 삭제
+    setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+    try {
+      await sbDelete("messages", `id=eq.${msg.id}`);
+    } catch (e) {
+      setConnError("삭제 실패. 다시 시도해주세요.");
+      // 실패 시 되돌림
+      setMessages((prev) => [...prev, msg].sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
+    }
+  }
+
+  async function toggleReaction(msg, emoji) {
+    setOpenPickerFor(null);
+    const current = msg.reactions && typeof msg.reactions === "object" ? msg.reactions : {};
+    const usersForEmoji = Array.isArray(current[emoji]) ? current[emoji] : [];
+    const alreadyReacted = usersForEmoji.includes(currentUser);
+
+    const nextUsers = alreadyReacted
+      ? usersForEmoji.filter((u) => u !== currentUser)
+      : [...usersForEmoji, currentUser];
+
+    const nextReactions = { ...current };
+    if (nextUsers.length > 0) {
+      nextReactions[emoji] = nextUsers;
+    } else {
+      delete nextReactions[emoji];
+    }
+
+    // 낙관적 업데이트
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msg.id ? { ...m, reactions: nextReactions } : m))
+    );
+
+    try {
+      await sbUpdate("messages", `id=eq.${msg.id}`, { reactions: nextReactions });
+    } catch (e) {
+      setConnError("리액션 반영 실패.");
+      // 실패 시 되돌림
+      setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, reactions: current } : m)));
+    }
+  }
+
+  async function saveNickname(newNickname) {
+    const trimmed = newNickname.trim();
+    try {
+      await sbUpdate("whitelist", `code=eq.${encodeURIComponent(currentCode)}`, {
+        nickname: trimmed || null,
+      });
+      onNicknameChange(trimmed);
+      setNicknameMap((prev) => ({ ...prev, [currentUser]: trimmed || undefined }));
+      return true;
+    } catch (e) {
+      setConnError("닉네임 저장 실패. 다시 시도해주세요.");
+      return false;
+    }
+  }
+
+
 
   return (
     <div
@@ -690,6 +1094,8 @@ function ChatMain({ currentUser, isAdmin }) {
 
         {/* 유저 패널 */}
         <div
+          onClick={() => setShowProfile(true)}
+          title="프로필 / 닉네임 설정"
           style={{
             height: 52,
             background: "#232428",
@@ -697,6 +1103,7 @@ function ChatMain({ currentUser, isAdmin }) {
             alignItems: "center",
             padding: "0 8px",
             gap: 8,
+            cursor: "pointer",
           }}
         >
           <div
@@ -714,11 +1121,11 @@ function ChatMain({ currentUser, isAdmin }) {
               flexShrink: 0,
             }}
           >
-            {initials(currentUser)}
+            {initials(displayName(currentUser))}
           </div>
           <div style={{ minWidth: 0 }}>
             <div style={{ color: "#fff", fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {currentUser}
+              {displayName(currentUser)}
             </div>
             <div style={{ color: "#949ba4", fontSize: 11 }}>
               {isAdmin ? "관리자" : "온라인"}
@@ -726,6 +1133,15 @@ function ChatMain({ currentUser, isAdmin }) {
           </div>
         </div>
       </div>
+
+      {showProfile && (
+        <ProfileModal
+          currentUser={currentUser}
+          nickname={nickname}
+          onSave={saveNickname}
+          onClose={() => setShowProfile(false)}
+        />
+      )}
 
       {/* 채팅 영역 */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -756,38 +1172,177 @@ function ChatMain({ currentUser, isAdmin }) {
               아직 메시지가 없습니다. 첫 메시지를 보내보세요!
             </div>
           )}
-          {messages.map((m) => (
-            <div key={m.id} style={{ display: "flex", gap: 12, marginTop: 16 }}>
+          {messages.map((m, idx) => {
+            const prev = messages[idx - 1];
+            const isGrouped =
+              prev &&
+              prev.author === m.author &&
+              !prev.image_url === !m.image_url && // 그룹 여부와 무관하지만 안전하게 유지
+              new Date(m.created_at) - new Date(prev.created_at) < 5 * 60 * 1000;
+
+            const reactionList = summarizeReactions(m.reactions, currentUser);
+            const canDelete = isAdmin || m.author === currentUser;
+            const isHovered = hoveredMsg === m.id;
+
+            return (
               <div
+                key={m.id}
+                onMouseEnter={() => setHoveredMsg(m.id)}
+                onMouseLeave={() => setHoveredMsg(null)}
                 style={{
-                  width: 40,
-                  height: 40,
-                  borderRadius: "50%",
-                  background: avatarColor(m.author),
-                  color: "#fff",
                   display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontWeight: 700,
-                  fontSize: 14,
-                  flexShrink: 0,
+                  gap: 12,
+                  marginTop: isGrouped ? 2 : 16,
+                  padding: "2px 8px",
+                  marginLeft: -8,
+                  marginRight: -8,
+                  borderRadius: 6,
+                  background: isHovered ? "#2e3035" : "transparent",
+                  position: "relative",
                 }}
               >
-                {initials(m.author)}
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <div>
-                  <span style={{ color: "#fff", fontWeight: 600, fontSize: 15 }}>{m.author}</span>
-                  <span style={{ color: "#949ba4", fontSize: 12, marginLeft: 8 }}>
-                    {formatTime(m.created_at)}
-                  </span>
+                <div style={{ width: 40, flexShrink: 0 }}>
+                  {!isGrouped && (
+                    <div
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: "50%",
+                        background: avatarColor(m.author),
+                        color: "#fff",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontWeight: 700,
+                        fontSize: 14,
+                      }}
+                    >
+                      {initials(displayName(m.author))}
+                    </div>
+                  )}
+                  {isGrouped && isHovered && (
+                    <div style={{ color: "#949ba4", fontSize: 10, textAlign: "center", marginTop: 4 }}>
+                      {formatTime(m.created_at)}
+                    </div>
+                  )}
                 </div>
-                <div style={{ color: "#dbdee1", fontSize: 15, marginTop: 2, wordBreak: "break-word" }}>
-                  {m.text}
+
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  {!isGrouped && (
+                    <div>
+                      <span style={{ color: "#fff", fontWeight: 600, fontSize: 15 }}>
+                        {displayName(m.author)}
+                      </span>
+                      <span style={{ color: "#949ba4", fontSize: 12, marginLeft: 8 }}>
+                        {formatTime(m.created_at)}
+                      </span>
+                    </div>
+                  )}
+                  {m.text && (
+                    <div style={{ color: "#dbdee1", fontSize: 15, marginTop: isGrouped ? 0 : 2, wordBreak: "break-word" }}>
+                      {m.text}
+                    </div>
+                  )}
+                  {m.image_url && (
+                    <img
+                      src={m.image_url}
+                      alt="첨부 이미지"
+                      onClick={() => window.open(m.image_url, "_blank")}
+                      style={{
+                        marginTop: 6,
+                        maxWidth: 320,
+                        maxHeight: 320,
+                        borderRadius: 8,
+                        display: "block",
+                        cursor: "pointer",
+                        objectFit: "contain",
+                      }}
+                    />
+                  )}
+
+                  {reactionList.length > 0 && (
+                    <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                      {reactionList.map((r) => (
+                        <button
+                          key={r.emoji}
+                          onClick={() => toggleReaction(m, r.emoji)}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 4,
+                            background: r.reactedByMe ? "#3c4270" : "#2b2d31",
+                            border: r.reactedByMe ? "1px solid #5865F2" : "1px solid transparent",
+                            borderRadius: 10,
+                            padding: "2px 8px",
+                            fontSize: 13,
+                            color: "#dbdee1",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <span>{r.emoji}</span>
+                          <span style={{ fontSize: 12 }}>{r.count}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
+
+                {isHovered && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: -14,
+                      right: 8,
+                      background: "#313338",
+                      border: "1px solid #26272b",
+                      borderRadius: 6,
+                      display: "flex",
+                      boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                    }}
+                  >
+                    <div style={{ position: "relative" }}>
+                      <button
+                        onClick={() => setOpenPickerFor(openPickerFor === m.id ? null : m.id)}
+                        title="이모지 반응"
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          color: "#dbdee1",
+                          fontSize: 15,
+                          padding: "6px 9px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        😀
+                      </button>
+                      {openPickerFor === m.id && (
+                        <EmojiPicker
+                          onPick={(emoji) => toggleReaction(m, emoji)}
+                          onClose={() => setOpenPickerFor(null)}
+                        />
+                      )}
+                    </div>
+                    {canDelete && (
+                      <button
+                        onClick={() => deleteMessage(m)}
+                        title="메시지 삭제"
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          color: "#ed4245",
+                          fontSize: 15,
+                          padding: "6px 9px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        🗑️
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
           {connError && (
             <div style={{ color: "#ed4245", fontSize: 12, marginTop: 10 }}>{connError}</div>
           )}
@@ -795,6 +1350,42 @@ function ChatMain({ currentUser, isAdmin }) {
         </div>
 
         <div style={{ padding: "0 16px 24px" }}>
+          {pendingImage && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                background: "#2b2d31",
+                borderRadius: 8,
+                padding: 10,
+                marginBottom: 8,
+              }}
+            >
+              <img
+                src={pendingImage.previewUrl}
+                alt="첨부할 이미지 미리보기"
+                style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6 }}
+              />
+              <div style={{ flex: 1, color: "#dbdee1", fontSize: 13 }}>
+                {pendingImage.file.name}
+              </div>
+              <button
+                onClick={cancelPendingImage}
+                style={{
+                  background: "#3f4147",
+                  border: "none",
+                  color: "#dbdee1",
+                  borderRadius: 4,
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                취소
+              </button>
+            </div>
+          )}
           <div
             style={{
               background: "#383a40",
@@ -805,10 +1396,36 @@ function ChatMain({ currentUser, isAdmin }) {
             }}
           >
             <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              onChange={handleFileSelect}
+              style={{ display: "none" }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              title="이미지 첨부"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#b5bac1",
+                fontSize: 20,
+                cursor: "pointer",
+                padding: "8px 6px 8px 0",
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              📎
+            </button>
+            <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-              placeholder={`#${channelName}에 메시지 보내기`}
+              placeholder={
+                uploading ? "이미지 업로드 중..." : `#${channelName}에 메시지 보내기`
+              }
+              disabled={uploading}
               style={{
                 flex: 1,
                 background: "transparent",
@@ -819,19 +1436,47 @@ function ChatMain({ currentUser, isAdmin }) {
                 padding: "11px 0",
               }}
             />
+            <div style={{ position: "relative" }}>
+              <button
+                onClick={() => setShowInputEmojiPicker((v) => !v)}
+                title="이모지 삽입"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#b5bac1",
+                  fontSize: 18,
+                  cursor: "pointer",
+                  padding: "6px 6px",
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
+                🙂
+              </button>
+              {showInputEmojiPicker && (
+                <EmojiPicker
+                  onPick={(emoji) => {
+                    setInput((prev) => prev + emoji);
+                    setShowInputEmojiPicker(false);
+                  }}
+                  onClose={() => setShowInputEmojiPicker(false)}
+                />
+              )}
+            </div>
             <button
               onClick={sendMessage}
+              disabled={uploading}
               style={{
                 background: "transparent",
                 border: "none",
-                color: input.trim() ? "#5865F2" : "#4e5058",
+                color: (input.trim() || pendingImage) && !uploading ? "#5865F2" : "#4e5058",
                 fontWeight: 700,
                 fontSize: 13,
-                cursor: input.trim() ? "pointer" : "default",
+                cursor: (input.trim() || pendingImage) && !uploading ? "pointer" : "default",
                 padding: "6px 4px",
               }}
             >
-              전송
+              {uploading ? "전송 중..." : "전송"}
             </button>
           </div>
         </div>
@@ -878,7 +1523,9 @@ export default function App() {
   const [stage, setStage] = useState("gate"); // gate -> licensePrompt -> killed -> chat -> checking
   const [licenseError, setLicenseError] = useState(false);
   const [licenseErrorMsg, setLicenseErrorMsg] = useState("");
-  const [currentUser, setCurrentUser] = useState("");
+  const [currentUser, setCurrentUser] = useState(""); // 관리자가 부여한 고유 이름 (@이름)
+  const [currentCode, setCurrentCode] = useState(""); // 로그인에 사용한 라이선스 코드
+  const [nickname, setNickname] = useState(""); // 채팅에 표시되는 닉네임 (없으면 currentUser 그대로)
   const [isAdmin, setIsAdmin] = useState(false);
 
   if (!CONFIGURED) return <NotConfiguredScreen />;
@@ -894,11 +1541,13 @@ export default function App() {
     try {
       const rows = await sbSelect(
         "whitelist",
-        `code=eq.${encodeURIComponent(code)}&select=name,code,is_admin`
+        `code=eq.${encodeURIComponent(code)}&select=name,code,is_admin,nickname`
       );
       if (rows.length > 0) {
         const match = rows[0];
         setCurrentUser(match.name);
+        setCurrentCode(match.code);
+        setNickname(match.nickname || "");
         setIsAdmin(Boolean(match.is_admin));
         setStage("chat");
       } else {
@@ -915,7 +1564,15 @@ export default function App() {
   if (stage === "killed") return <KilledScreen />;
 
   if (stage === "chat") {
-    return <ChatMain currentUser={currentUser} isAdmin={isAdmin} />;
+    return (
+      <ChatMain
+        currentUser={currentUser}
+        currentCode={currentCode}
+        nickname={nickname}
+        onNicknameChange={setNickname}
+        isAdmin={isAdmin}
+      />
+    );
   }
 
   return (
