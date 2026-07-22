@@ -560,15 +560,22 @@ function StorageGauge({ usageBytes }) {
   );
 }
 
-function ProfileModal({ currentUser, nickname, onSave, onClose }) {
+// 프로필 아바타로 고를 수 있는 색상 팔레트
+const AVATAR_COLORS = [
+  "#5865F2", "#EB459E", "#57F287", "#FEE75C", "#ED4245",
+  "#9B59B6", "#3BA55D", "#E67E22", "#1ABC9C", "#95A5A6",
+];
+
+function ProfileModal({ currentUser, nickname, currentColor, onSave, onClose }) {
   const [value, setValue] = useState(nickname || "");
+  const [color, setColor] = useState(currentColor || avatarColor(currentUser));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   async function handleSave() {
     setSaving(true);
     setSaved(false);
-    const ok = await onSave(value);
+    const ok = await onSave(value, color);
     setSaving(false);
     if (ok) {
       setSaved(true);
@@ -605,7 +612,7 @@ function ProfileModal({ currentUser, nickname, onSave, onClose }) {
               width: 56,
               height: 56,
               borderRadius: "50%",
-              background: avatarColor(currentUser),
+              background: color,
               color: "#fff",
               display: "flex",
               alignItems: "center",
@@ -651,6 +658,37 @@ function ProfileModal({ currentUser, nickname, onSave, onClose }) {
           채팅에는 닉네임이 표시되고, 원래 이름(@{currentUser})은 프로필에서만 보여요. 비워두면 원래 이름이 그대로 표시돼요.
         </div>
 
+        <label
+          style={{
+            color: "#b5bac1",
+            fontSize: 12,
+            fontWeight: 700,
+            textTransform: "uppercase",
+            display: "block",
+            marginTop: 18,
+          }}
+        >
+          프로필 색상
+        </label>
+        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+          {AVATAR_COLORS.map((c) => (
+            <button
+              key={c}
+              onClick={() => setColor(c)}
+              title={c}
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: "50%",
+                background: c,
+                border: color === c ? "3px solid #fff" : "3px solid transparent",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            />
+          ))}
+        </div>
+
         <button
           onClick={handleSave}
           disabled={saving}
@@ -667,7 +705,7 @@ function ProfileModal({ currentUser, nickname, onSave, onClose }) {
             cursor: saving ? "default" : "pointer",
           }}
         >
-          {saving ? "저장 중..." : saved ? "저장됨 ✓" : "닉네임 저장"}
+          {saving ? "저장 중..." : saved ? "저장됨 ✓" : "프로필 저장"}
         </button>
         <div
           onClick={onClose}
@@ -883,7 +921,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const [activeChannel, setActiveChannel] = useState(null);
   const [showAdmin, setShowAdmin] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
-  const [nicknameMap, setNicknameMap] = useState({}); // { 원래이름: 닉네임 }
+  const [profileMap, setProfileMap] = useState({}); // { 원래이름: { nickname, avatar_color } }
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
   const [loadingChannels, setLoadingChannels] = useState(true);
@@ -892,27 +930,35 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const [serverName, setServerName] = useState("우리 서버");
   const [editingServerName, setEditingServerName] = useState(false);
   const [serverNameDraft, setServerNameDraft] = useState("");
+  const [myColor, setMyColor] = useState(null);
 
-  // 전체 화이트리스트의 닉네임 맵 로드 (다른 사람 닉네임도 표시하려면 필요)
-  useEffect(() => {
-    let cancelled = false;
-    sbSelect("whitelist", "select=name,nickname")
+  // 전체 사용자 프로필(닉네임/색상) 로드 — 다른 사람이 바꾼 것도 반영되도록 주기적으로 갱신
+  function refreshProfiles() {
+    sbSelect("whitelist", "select=name,nickname,avatar_color")
       .then((rows) => {
-        if (cancelled) return;
         const map = {};
         rows.forEach((r) => {
-          if (r.nickname) map[r.name] = r.nickname;
+          map[r.name] = { nickname: r.nickname, avatar_color: r.avatar_color };
         });
-        setNicknameMap(map);
+        setProfileMap(map);
+        const mine = rows.find((r) => r.name === currentUser);
+        if (mine?.avatar_color) setMyColor(mine.avatar_color);
       })
       .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }
+
+  useEffect(() => {
+    refreshProfiles();
+    const interval = setInterval(refreshProfiles, 20000); // 20초마다 갱신
+    return () => clearInterval(interval);
+  }, [currentUser]);
 
   function displayName(originalName) {
-    return nicknameMap[originalName] || originalName;
+    return profileMap[originalName]?.nickname || originalName;
+  }
+
+  function userColor(originalName) {
+    return profileMap[originalName]?.avatar_color || avatarColor(originalName);
   }
 
   const [pendingImage, setPendingImage] = useState(null); // { file, previewUrl }
@@ -1142,17 +1188,22 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     }
   }
 
-  async function saveNickname(newNickname) {
+  async function saveProfile(newNickname, newColor) {
     const trimmed = newNickname.trim();
     try {
       await sbUpdate("whitelist", `code=eq.${encodeURIComponent(currentCode)}`, {
         nickname: trimmed || null,
+        avatar_color: newColor || null,
       });
       onNicknameChange(trimmed);
-      setNicknameMap((prev) => ({ ...prev, [currentUser]: trimmed || undefined }));
+      setMyColor(newColor || null);
+      setProfileMap((prev) => ({
+        ...prev,
+        [currentUser]: { nickname: trimmed || null, avatar_color: newColor || null },
+      }));
       return true;
     } catch (e) {
-      setConnError("닉네임 저장 실패. 다시 시도해주세요.");
+      setConnError("프로필 저장 실패. 다시 시도해주세요.");
       return false;
     }
   }
@@ -1342,7 +1393,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
               width: 32,
               height: 32,
               borderRadius: "50%",
-              background: avatarColor(currentUser),
+              background: userColor(currentUser),
               color: "#fff",
               display: "flex",
               alignItems: "center",
@@ -1369,7 +1420,8 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
         <ProfileModal
           currentUser={currentUser}
           nickname={nickname}
-          onSave={saveNickname}
+          currentColor={myColor || avatarColor(currentUser)}
+          onSave={saveProfile}
           onClose={() => setShowProfile(false)}
         />
       )}
@@ -1441,7 +1493,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                         width: 40,
                         height: 40,
                         borderRadius: "50%",
-                        background: avatarColor(m.author),
+                        background: userColor(m.author),
                         color: "#fff",
                         display: "flex",
                         alignItems: "center",
