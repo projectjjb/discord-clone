@@ -110,6 +110,37 @@ function subscribeToMessages(onInsert, onUpdate, onDelete) {
 }
 
 // 이미지를 Supabase Storage(chat-images 버킷)에 업로드하고 공개 URL을 반환
+// 이미지를 브라우저에서 리사이즈+압축 (용량을 크게 줄여 Storage 한도를 아낌)
+const MAX_IMAGE_DIMENSION = 1600; // 긴 변 기준 최대 px
+const JPEG_QUALITY = 0.8;
+
+async function compressImage(file) {
+  // GIF는 움직이는 이미지가 깨질 수 있어 압축하지 않고 그대로 전송
+  if (file.type === "image/gif") return file;
+
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(bitmap.width, bitmap.height));
+  const targetW = Math.round(bitmap.width * scale);
+  const targetH = Math.round(bitmap.height * scale);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, targetW, targetH);
+
+  // PNG는 투명도를 지키기 위해 png로, 그 외엔 용량이 작은 jpeg로 재인코딩
+  const outputType = file.type === "image/png" ? "image/png" : "image/jpeg";
+
+  const blob = await new Promise((resolve) =>
+    canvas.toBlob(resolve, outputType, JPEG_QUALITY)
+  );
+
+  if (!blob || blob.size >= file.size) return file; // 압축이 더 크면 원본 사용
+  const ext = outputType === "image/png" ? "png" : "jpg";
+  return new File([blob], `compressed.${ext}`, { type: outputType });
+}
+
 async function uploadImage(file) {
   const ext = file.name.split(".").pop() || "png";
   const path = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
@@ -145,6 +176,68 @@ function validateImageFile(file) {
     return "파일이 너무 큽니다 (최대 8MB)";
   }
   return null;
+}
+
+// ---------- Storage 용량 관리 ----------
+const STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024; // Supabase 무료 티어 1GB
+const CLEANUP_THRESHOLD = 0.9; // 90% 넘으면 오래된 이미지부터 정리
+
+// chat-images 버킷의 전체 파일 목록(이름, 용량, 생성일)을 가져옴
+async function listAllImages() {
+  const url = `${SUPABASE_URL}/storage/v1/object/list/chat-images`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ limit: 1000, sortBy: { column: "created_at", order: "asc" } }),
+  });
+  if (!res.ok) throw new Error("파일 목록 조회 실패");
+  return res.json(); // [{ name, created_at, metadata: { size } }, ...]
+}
+
+async function deleteImageFromStorage(name) {
+  const url = `${SUPABASE_URL}/storage/v1/object/chat-images/${name}`;
+  await fetch(url, {
+    method: "DELETE",
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    },
+  });
+}
+
+// 용량이 임계치를 넘으면 가장 오래된 이미지부터 지우고, 해당 메시지의 image_url도 비움
+async function cleanupOldImagesIfNeeded() {
+  try {
+    const files = await listAllImages();
+    const totalBytes = files.reduce((sum, f) => sum + (f.metadata?.size || 0), 0);
+    if (totalBytes < STORAGE_LIMIT_BYTES * CLEANUP_THRESHOLD) return;
+
+    // 가장 오래된 것부터, 용량이 임계치 아래로 내려갈 때까지 삭제
+    let remaining = totalBytes;
+    for (const f of files) {
+      if (remaining < STORAGE_LIMIT_BYTES * CLEANUP_THRESHOLD) break;
+      await deleteImageFromStorage(f.name);
+      remaining -= f.metadata?.size || 0;
+      // 해당 이미지를 참조하던 메시지에서 image_url 제거 (메시지 자체는 남기고 사진만 정리)
+      const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/chat-images/${f.name}`;
+      await sbUpdate("messages", `image_url=eq.${encodeURIComponent(publicUrl)}`, {
+        image_url: null,
+        text: "(오래되어 자동 삭제된 사진)",
+      }).catch(() => {});
+    }
+  } catch (e) {
+    // 정리 실패는 조용히 무시 (핵심 기능이 아니므로 채팅 자체를 막지 않음)
+  }
+}
+
+// 현재 Storage 사용량을 조회 (바이트 단위)
+async function getStorageUsage() {
+  const files = await listAllImages();
+  return files.reduce((sum, f) => sum + (f.metadata?.size || 0), 0);
 }
 
 // ---------- 데이터 ----------
@@ -413,6 +506,49 @@ function KilledScreen() {
 }
 
 // ---------- 프로필 / 닉네임 설정 ----------
+// ---------- 저장공간 게이지 ----------
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(0)}MB`;
+}
+
+function StorageGauge({ usageBytes }) {
+  if (usageBytes == null) return null;
+  const ratio = Math.min(1, usageBytes / STORAGE_LIMIT_BYTES);
+  const percent = Math.round(ratio * 100);
+  const barColor = ratio > 0.9 ? "#ed4245" : ratio > 0.7 ? "#faa61a" : "#3ba55d";
+
+  return (
+    <div style={{ padding: "10px 12px", borderTop: "1px solid #1e1f22" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          color: "#949ba4",
+          fontSize: 11,
+          marginBottom: 4,
+        }}
+      >
+        <span>사진 저장공간</span>
+        <span>
+          {formatBytes(usageBytes)} / {formatBytes(STORAGE_LIMIT_BYTES)}
+        </span>
+      </div>
+      <div style={{ background: "#1e1f22", borderRadius: 4, height: 6, overflow: "hidden" }}>
+        <div
+          style={{
+            width: `${percent}%`,
+            height: "100%",
+            background: barColor,
+            transition: "width 0.3s",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function ProfileModal({ currentUser, nickname, onSave, onClose }) {
   const [value, setValue] = useState(nickname || "");
   const [saving, setSaving] = useState(false);
@@ -741,6 +877,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const [messages, setMessages] = useState([]);
   const [loadingChannels, setLoadingChannels] = useState(true);
   const [connError, setConnError] = useState("");
+  const [storageUsage, setStorageUsage] = useState(null); // 바이트 단위, null이면 아직 로드 전
 
   // 전체 화이트리스트의 닉네임 맵 로드 (다른 사람 닉네임도 표시하려면 필요)
   useEffect(() => {
@@ -787,6 +924,19 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  function refreshStorageUsage() {
+    getStorageUsage()
+      .then((bytes) => setStorageUsage(bytes))
+      .catch(() => {});
+  }
+
+  // 용량 게이지: 최초 로드 + 1분마다 갱신 (모두의 화면에 최신 상태가 보이도록)
+  useEffect(() => {
+    refreshStorageUsage();
+    const interval = setInterval(refreshStorageUsage, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   // 채널 바뀔 때마다 해당 채널 메시지 로드
@@ -880,7 +1030,8 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     try {
       if (imageToSend) {
         setUploading(true);
-        imageUrl = await uploadImage(imageToSend.file);
+        const compressed = await compressImage(imageToSend.file);
+        imageUrl = await uploadImage(compressed);
       }
       const [saved] = await sbInsert("messages", {
         channel_id: activeChannel,
@@ -889,6 +1040,11 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
         image_url: imageUrl,
       });
       setMessages((prev) => prev.map((m) => (m.id === tempId ? saved : m)));
+      if (imageUrl) {
+        // 사진을 보낸 김에 용량 체크 (임계치 넘으면 오래된 사진부터 자동 정리)
+        cleanupOldImagesIfNeeded();
+        refreshStorageUsage();
+      }
     } catch (e) {
       setConnError(e.message || "메시지 전송 실패. 다시 시도해주세요.");
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
@@ -1072,6 +1228,8 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
           ))}
         </div>
 
+        <StorageGauge usageBytes={storageUsage} />
+
         {isAdmin && (
           <div style={{ padding: 8 }}>
             <button
@@ -1251,12 +1409,15 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                       onClick={() => window.open(m.image_url, "_blank")}
                       style={{
                         marginTop: 6,
-                        maxWidth: 320,
-                        maxHeight: 320,
+                        width: "100%",
+                        maxWidth: 480,
+                        minWidth: 220,
+                        maxHeight: 480,
                         borderRadius: 8,
                         display: "block",
                         cursor: "pointer",
                         objectFit: "contain",
+                        background: "#1e1f22",
                       }}
                     />
                   )}
