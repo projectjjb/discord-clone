@@ -1410,16 +1410,21 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     };
   }, []);
 
-  // 서버 이름 로드 (최초 1회)
+  // 서버 이름 로드 + 주기적 갱신 (다른 사람이 바꾼 것도 반영)
   useEffect(() => {
     let cancelled = false;
-    sbSelect("server_settings", "select=server_name&id=eq.1")
-      .then((rows) => {
-        if (!cancelled && rows.length > 0) setServerName(rows[0].server_name);
-      })
-      .catch(() => {});
+    function loadServerName() {
+      sbSelect("server_settings", "select=server_name&id=eq.1")
+        .then((rows) => {
+          if (!cancelled && rows.length > 0) setServerName(rows[0].server_name);
+        })
+        .catch(() => {});
+    }
+    loadServerName();
+    const interval = setInterval(loadServerName, 15000); // 15초마다
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
   }, []);
 
@@ -1490,9 +1495,22 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     return unsubscribe;
   }, [activeChannel]);
 
+  const scrollToBottom = (smooth = true) => {
+    bottomRef.current?.scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
+  };
+
+  // 메시지가 바뀌면 맨 아래로. 약간의 지연을 줘서 렌더링 완료 후 스크롤
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    scrollToBottom(true);
+    const t = setTimeout(() => scrollToBottom(false), 100);
+    return () => clearTimeout(t);
   }, [messages]);
+
+  // 채널을 새로 열면 즉시 맨 아래로 (부드러운 애니메이션 없이 바로)
+  useEffect(() => {
+    const t = setTimeout(() => scrollToBottom(false), 50);
+    return () => clearTimeout(t);
+  }, [activeChannel]);
 
   // 이미지 정리 (미리보기 URL 메모리 해제)
   useEffect(() => {
@@ -1658,28 +1676,25 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
           flexShrink: 0,
         }}
       >
-        {initialServers.map((s) => (
-          <div
-            key={s.id}
-            title={s.name}
-            style={{
-              width: 48,
-              height: 48,
-              borderRadius: 16,
-              background: "#5865F2",
-              color: "#fff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontWeight: 700,
-              fontSize: 18,
-              cursor: "pointer",
-              transition: "border-radius 0.15s, background 0.15s",
-            }}
-          >
-            {s.icon}
-          </div>
-        ))}
+        <div
+          title={serverName}
+          style={{
+            width: 48,
+            height: 48,
+            borderRadius: 16,
+            background: "#5865F2",
+            color: "#fff",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontWeight: 700,
+            fontSize: 18,
+            cursor: "pointer",
+            transition: "border-radius 0.15s, background 0.15s",
+          }}
+        >
+          {serverName?.trim()?.[0] || "?"}
+        </div>
       </div>
 
       {/* 채널 목록 */}
@@ -1984,6 +1999,9 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                       src={m.image_url}
                       alt="첨부 이미지"
                       onClick={() => window.open(m.image_url, "_blank")}
+                      onLoad={() => {
+                        if (idx === messages.length - 1) scrollToBottom(false);
+                      }}
                       style={{
                         marginTop: 6,
                         width: "100%",
