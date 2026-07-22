@@ -772,16 +772,17 @@ function ProfileModal({ currentUser, nickname, currentColor, onSave, onClose }) 
 }
 
 // ---------- 관리자: 화이트리스트 패널 ----------
-function AdminPanel({ onClose }) {
+function AdminPanel({ currentCode, onClose }) {
   const [name, setName] = useState("");
   const [whitelist, setWhitelist] = useState([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
   const [err, setErr] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    sbSelect("whitelist", "select=id,name,code,nickname&order=id.desc")
+    sbSelect("whitelist", "select=id,name,code,nickname,is_admin&order=id.desc")
       .then((rows) => {
         if (!cancelled) setWhitelist(rows);
       })
@@ -805,6 +806,32 @@ function AdminPanel({ onClose }) {
       setErr("추가 실패. 코드가 중복되었을 수 있어요, 다시 시도해주세요.");
     } finally {
       setAdding(false);
+    }
+  }
+
+  async function deleteUser(user) {
+    if (user.code === currentCode) {
+      setErr("지금 로그인 중인 본인 계정은 삭제할 수 없습니다.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `'${user.name}'을(를) 화이트리스트에서 삭제할까요?\n이 코드로는 더 이상 접속할 수 없게 됩니다.`
+      )
+    )
+      return;
+
+    setDeletingId(user.id);
+    setErr("");
+    const backup = whitelist;
+    setWhitelist((prev) => prev.filter((u) => u.id !== user.id)); // 낙관적 삭제
+    try {
+      await sbDelete("whitelist", `id=eq.${user.id}`);
+    } catch (e) {
+      setErr(`삭제 실패: ${e.message}`);
+      setWhitelist(backup); // 실패 시 되돌림
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -902,31 +929,55 @@ function AdminPanel({ onClose }) {
                 marginBottom: 8,
               }}
             >
-              <div>
+              <div style={{ minWidth: 0 }}>
                 <div style={{ color: "#fff", fontSize: 14, fontWeight: 600 }}>
                   {u.name}
                   {u.nickname && (
                     <span style={{ color: "#949ba4", fontWeight: 400 }}> ({u.nickname})</span>
+                  )}
+                  {u.is_admin && (
+                    <span style={{ color: "#faa61a", fontSize: 11, marginLeft: 6 }}>관리자</span>
+                  )}
+                  {u.code === currentCode && (
+                    <span style={{ color: "#3ba55d", fontSize: 11, marginLeft: 6 }}>나</span>
                   )}
                 </div>
                 <div style={{ color: "#949ba4", fontSize: 12, marginTop: 2, fontFamily: "monospace" }}>
                   {u.code}
                 </div>
               </div>
-              <button
-                onClick={() => navigator.clipboard?.writeText(u.code)}
-                style={{
-                  background: "#3f4147",
-                  border: "none",
-                  color: "#dbdee1",
-                  fontSize: 12,
-                  padding: "6px 10px",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                }}
-              >
-                복사
-              </button>
+              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                <button
+                  onClick={() => navigator.clipboard?.writeText(u.code)}
+                  style={{
+                    background: "#3f4147",
+                    border: "none",
+                    color: "#dbdee1",
+                    fontSize: 12,
+                    padding: "6px 10px",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                  }}
+                >
+                  복사
+                </button>
+                <button
+                  onClick={() => deleteUser(u)}
+                  disabled={deletingId === u.id || u.code === currentCode}
+                  title={u.code === currentCode ? "본인 계정은 삭제할 수 없습니다" : "삭제"}
+                  style={{
+                    background: u.code === currentCode ? "#3a3c41" : "#4a2326",
+                    border: "none",
+                    color: u.code === currentCode ? "#6d6f78" : "#ed4245",
+                    fontSize: 12,
+                    padding: "6px 10px",
+                    borderRadius: 4,
+                    cursor: u.code === currentCode ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {deletingId === u.id ? "삭제 중..." : "삭제"}
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -1836,7 +1887,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
       </div>
 
       {showAdmin && (
-        <AdminPanel onClose={() => setShowAdmin(false)} />
+        <AdminPanel currentCode={currentCode} onClose={() => setShowAdmin(false)} />
       )}
     </div>
   );
