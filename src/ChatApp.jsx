@@ -1316,6 +1316,91 @@ function AdminPanel({ currentCode, onClose }) {
   );
 }
 
+// ---------- 스포일러 ----------
+// 열어본 스포일러는 브라우저에 기록해서, 한 번 열면 계속 열린 상태로 유지
+function getOpenedSpoilers() {
+  try {
+    return JSON.parse(localStorage.getItem("openedSpoilers") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function markSpoilerOpened(key) {
+  try {
+    const opened = getOpenedSpoilers();
+    opened[key] = true;
+    localStorage.setItem("openedSpoilers", JSON.stringify(opened));
+  } catch {
+    // localStorage 사용 불가 시 무시
+  }
+}
+
+// 개별 스포일러 조각
+function SpoilerText({ spoilerKey, children }) {
+  const [revealed, setRevealed] = useState(() => Boolean(getOpenedSpoilers()[spoilerKey]));
+
+  if (revealed) {
+    return <span style={{ background: "rgba(255,255,255,0.06)", borderRadius: 3, padding: "0 2px" }}>{children}</span>;
+  }
+
+  return (
+    <span
+      onClick={(e) => {
+        e.stopPropagation();
+        markSpoilerOpened(spoilerKey);
+        setRevealed(true);
+      }}
+      title="클릭해서 보기"
+      style={{
+        background: "#1a1b1e",
+        color: "transparent",
+        borderRadius: 3,
+        padding: "0 4px",
+        cursor: "pointer",
+        userSelect: "none",
+        boxShadow: "inset 0 0 0 1px #111214",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+// 메시지 본문을 렌더링 (||스포일러|| 문법 처리)
+function MessageBody({ text, messageId }) {
+  // ||...|| 를 스포일러로 분리
+  const parts = [];
+  const regex = /\|\|([\s\S]+?)\|\|/g;
+  let lastIndex = 0;
+  let match;
+  let spoilerIdx = 0;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: "text", value: text.slice(lastIndex, match.index) });
+    }
+    parts.push({ type: "spoiler", value: match[1], key: `${messageId}-${spoilerIdx++}` });
+    lastIndex = regex.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    parts.push({ type: "text", value: text.slice(lastIndex) });
+  }
+
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.type === "spoiler" ? (
+          <SpoilerText key={i} spoilerKey={p.key}>
+            {p.value}
+          </SpoilerText>
+        ) : (
+          <span key={i}>{p.value}</span>
+        )
+      )}
+    </>
+  );
+}
+
 function formatTime(iso) {
   try {
     return new Date(iso).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" });
@@ -1392,6 +1477,16 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const [showInputEmojiPicker, setShowInputEmojiPicker] = useState(false);
 
   const bottomRef = useRef(null);
+  const scrollContainerRef = useRef(null);
+  const isNearBottomRef = useRef(true); // 사용자가 맨 아래 근처를 보고 있는지
+
+  function handleScroll() {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    // 맨 아래에서 120px 이내면 "하단을 보고 있다"고 판단
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isNearBottomRef.current = distanceFromBottom < 120;
+  }
   const fileInputRef = useRef(null);
 
   // 채널 목록 로드 (최초 1회)
@@ -1499,15 +1594,21 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     bottomRef.current?.scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
   };
 
-  // 메시지가 바뀌면 맨 아래로. 약간의 지연을 줘서 렌더링 완료 후 스크롤
+  // 메시지가 바뀌면, 사용자가 이미 하단 근처를 보고 있을 때만 따라 내려감
+  // (위로 스크롤해서 예전 메시지 보는 중이면 방해하지 않음)
   useEffect(() => {
-    scrollToBottom(true);
-    const t = setTimeout(() => scrollToBottom(false), 100);
-    return () => clearTimeout(t);
+    if (isNearBottomRef.current) {
+      scrollToBottom(true);
+      const t = setTimeout(() => {
+        if (isNearBottomRef.current) scrollToBottom(false);
+      }, 100);
+      return () => clearTimeout(t);
+    }
   }, [messages]);
 
-  // 채널을 새로 열면 즉시 맨 아래로 (부드러운 애니메이션 없이 바로)
+  // 채널을 새로 열면 항상 즉시 맨 아래로
   useEffect(() => {
+    isNearBottomRef.current = true;
     const t = setTimeout(() => scrollToBottom(false), 50);
     return () => clearTimeout(t);
   }, [activeChannel]);
@@ -1912,7 +2013,11 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
           {channelName}
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px" }}>
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          style={{ flex: 1, overflowY: "auto", padding: "16px 20px" }}
+        >
           {loadingChannels && (
             <div style={{ color: "#6d6f78", fontSize: 14, marginTop: 20 }}>불러오는 중...</div>
           )}
@@ -1990,8 +2095,8 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                     </div>
                   )}
                   {m.text && (
-                    <div style={{ color: "#dbdee1", fontSize: 15, marginTop: isGrouped ? 0 : 2, wordBreak: "break-word" }}>
-                      {m.text}
+                    <div style={{ color: "#dbdee1", fontSize: 15, marginTop: isGrouped ? 0 : 2, wordBreak: "break-word", whiteSpace: "pre-wrap" }}>
+                      <MessageBody text={m.text} messageId={m.id} />
                     </div>
                   )}
                   {m.image_url && (
@@ -2000,7 +2105,9 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                       alt="첨부 이미지"
                       onClick={() => window.open(m.image_url, "_blank")}
                       onLoad={() => {
-                        if (idx === messages.length - 1) scrollToBottom(false);
+                        if (idx === messages.length - 1 && isNearBottomRef.current) {
+                          scrollToBottom(false);
+                        }
                       }}
                       style={{
                         marginTop: 6,
@@ -2196,6 +2303,24 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                 padding: "11px 0",
               }}
             />
+            <button
+              onClick={() => {
+                setInput((prev) => prev + "||내용||");
+              }}
+              title="스포일러 (||내용||)"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#b5bac1",
+                fontSize: 16,
+                cursor: "pointer",
+                padding: "6px 4px",
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              🙈
+            </button>
             <div style={{ position: "relative" }}>
               <button
                 onClick={() => setShowInputEmojiPicker((v) => !v)}
