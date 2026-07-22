@@ -289,8 +289,10 @@ function EmojiPicker({ onPick, onClose, align = "left" }) {
         background: "#2b2d31",
         borderRadius: 8,
         padding: 8,
-        display: "flex",
-        gap: 4,
+        display: "grid",
+        gridTemplateColumns: "repeat(6, 1fr)",
+        gap: 2,
+        width: "max-content",
         boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
         zIndex: 30,
       }}
@@ -302,10 +304,11 @@ function EmojiPicker({ onPick, onClose, align = "left" }) {
           style={{
             background: "transparent",
             border: "none",
-            fontSize: 18,
+            fontSize: 20,
             cursor: "pointer",
-            padding: 4,
+            padding: "6px 8px",
             borderRadius: 4,
+            lineHeight: 1,
           }}
           onMouseEnter={(e) => (e.currentTarget.style.background = "#3f4147")}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
@@ -1411,6 +1414,8 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
             const reactionList = summarizeReactions(m.reactions, currentUser);
             const canDelete = m.author === currentUser;
             const isHovered = hoveredMsg === m.id;
+            const isPickerOpen = openPickerFor === m.id;
+            const showToolbar = isHovered || isPickerOpen;
 
             return (
               <div
@@ -1518,17 +1523,19 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                   )}
                 </div>
 
-                {isHovered && (
+                {showToolbar && (
                   <div
+                    onMouseEnter={() => setHoveredMsg(m.id)}
                     style={{
                       position: "absolute",
                       top: -14,
-                      right: 8,
+                      left: 52,
                       background: "#313338",
                       border: "1px solid #26272b",
                       borderRadius: 6,
                       display: "flex",
                       boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                      zIndex: 20,
                     }}
                   >
                     <div style={{ position: "relative" }}>
@@ -1546,9 +1553,9 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                       >
                         😀
                       </button>
-                      {openPickerFor === m.id && (
+                      {isPickerOpen && (
                         <EmojiPicker
-                          align="right"
+                          align="left"
                           onPick={(emoji) => toggleReaction(m, emoji)}
                           onClose={() => setOpenPickerFor(null)}
                         />
