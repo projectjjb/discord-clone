@@ -192,9 +192,17 @@ async function listAllImages() {
       Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ limit: 1000, sortBy: { column: "created_at", order: "asc" } }),
+    body: JSON.stringify({
+      prefix: "",
+      limit: 1000,
+      offset: 0,
+      sortBy: { column: "created_at", order: "asc" },
+    }),
   });
-  if (!res.ok) throw new Error("파일 목록 조회 실패");
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${errText}`);
+  }
   return res.json(); // [{ name, created_at, metadata: { size } }, ...]
 }
 
@@ -258,7 +266,7 @@ function initials(name) {
 }
 
 // ---------- 이모지 리액션 ----------
-const EMOJI_CHOICES = ["👍", "❤️", "😂", "😮", "😢", "🔥", "🎉", "👀", "🤔"];
+const EMOJI_CHOICES = ["👍", "❤️", "🤣", "😮", "😢", "🔥", "🎉", "👀", "🤔", "🖕", "♿", "‼️", "❓", "6️⃣", "7️⃣"];
 
 function EmojiPicker({ onPick, onClose, align = "left" }) {
   const ref = useRef(null);
