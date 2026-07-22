@@ -165,9 +165,9 @@ function initials(name) {
 }
 
 // ---------- 이모지 리액션 ----------
-const EMOJI_CHOICES = ["👍", "❤️", "😂", "😮", "😢", "🔥", "🎉", "👀","🤔"];
+const EMOJI_CHOICES = ["👍", "❤️", "😂", "😮", "😢", "🔥", "🎉", "👀", "🤔"];
 
-function EmojiPicker({ onPick, onClose }) {
+function EmojiPicker({ onPick, onClose, align = "left" }) {
   const ref = useRef(null);
   useEffect(() => {
     function handleClick(e) {
@@ -183,6 +183,7 @@ function EmojiPicker({ onPick, onClose }) {
       style={{
         position: "absolute",
         bottom: "100%",
+        [align === "right" ? "right" : "left"]: 0,
         marginBottom: 6,
         background: "#2b2d31",
         borderRadius: 8,
@@ -1181,7 +1182,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
               new Date(m.created_at) - new Date(prev.created_at) < 5 * 60 * 1000;
 
             const reactionList = summarizeReactions(m.reactions, currentUser);
-            const canDelete = isAdmin || m.author === currentUser;
+            const canDelete = m.author === currentUser;
             const isHovered = hoveredMsg === m.id;
 
             return (
@@ -1317,6 +1318,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                       </button>
                       {openPickerFor === m.id && (
                         <EmojiPicker
+                          align="right"
                           onPick={(emoji) => toggleReaction(m, emoji)}
                           onClose={() => setOpenPickerFor(null)}
                         />
@@ -1455,6 +1457,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
               </button>
               {showInputEmojiPicker && (
                 <EmojiPicker
+                  align="right"
                   onPick={(emoji) => {
                     setInput((prev) => prev + emoji);
                     setShowInputEmojiPicker(false);
