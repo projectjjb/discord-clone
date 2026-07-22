@@ -301,6 +301,16 @@ const initialServers = [
   { id: "s1", name: "우리 서버", icon: "우" },
 ];
 
+// 비밀번호를 평문 대신 해시로 저장하기 위한 함수
+// (브라우저 내장 SHA-256 사용, 이름을 섞어 같은 비밀번호라도 다른 값이 나오게 함)
+async function hashPassword(name, password) {
+  const data = new TextEncoder().encode(`${name}::${password}::chatapp`);
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function randomCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
@@ -438,13 +448,60 @@ function FakeNotFound({ onUnlock }) {
 }
 
 // ---------- 라이선스 입력 팝업 ----------
-function LicenseModal({ onSubmit, error, errorMsg, checking, onClose }) {
-  const [value, setValue] = useState("");
-  const inputRef = useRef(null);
+function LicenseModal({ onSubmitCode, onSubmitPassword, error, errorMsg, checking, onClose }) {
+  const [mode, setMode] = useState("password"); // "password" | "license"
+  const [code, setCode] = useState("");
+  const [loginName, setLoginName] = useState("");
+  const [loginPw, setLoginPw] = useState("");
+  const firstInputRef = useRef(null);
 
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    firstInputRef.current?.focus();
+  }, [mode]);
+
+  const inputStyle = {
+    width: "100%",
+    marginTop: 6,
+    padding: "10px 12px",
+    borderRadius: 4,
+    border: "none",
+    outline: error ? "2px solid #ed4245" : "none",
+    background: "#1e1f22",
+    color: "#fff",
+    fontSize: 15,
+    boxSizing: "border-box",
+    opacity: checking ? 0.6 : 1,
+  };
+
+  const labelStyle = {
+    color: "#b5bac1",
+    fontSize: 12,
+    fontWeight: 700,
+    textTransform: "uppercase",
+  };
+
+  function submit() {
+    if (checking) return;
+    if (mode === "license") {
+      onSubmitCode(code.trim());
+    } else {
+      onSubmitPassword(loginName.trim(), loginPw);
+    }
+  }
+
+  function tabStyle(active) {
+    return {
+      flex: 1,
+      padding: "9px 0",
+      background: active ? "#404249" : "transparent",
+      color: active ? "#fff" : "#949ba4",
+      border: "none",
+      borderRadius: 4,
+      fontSize: 13,
+      fontWeight: 600,
+      cursor: "pointer",
+    };
+  }
 
   return (
     <div
@@ -469,47 +526,68 @@ function LicenseModal({ onSubmit, error, errorMsg, checking, onClose }) {
           boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
         }}
       >
-        <div style={{ textAlign: "center", marginBottom: 4 }}>
-          <div style={{ color: "#fff", fontSize: 20, fontWeight: 700 }}>라이선스 코드 입력</div>
-          <div style={{ color: "#b5bac1", fontSize: 14, marginTop: 6 }}>
-            관리자에게 받은 코드를 입력하세요
-          </div>
+        <div style={{ textAlign: "center", marginBottom: 18 }}>
+          <div style={{ color: "#fff", fontSize: 20, fontWeight: 700 }}>로그인</div>
         </div>
-        <div style={{ marginTop: 20 }}>
-          <label style={{ color: "#b5bac1", fontSize: 12, fontWeight: 700, textTransform: "uppercase" }}>
-            License Code
-          </label>
-          <input
-            ref={inputRef}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !checking) onSubmit(value.trim());
-            }}
-            placeholder="XXXX-XXXX"
-            disabled={checking}
-            style={{
-              width: "100%",
-              marginTop: 6,
-              padding: "10px 12px",
-              borderRadius: 4,
-              border: "none",
-              outline: error ? "2px solid #ed4245" : "none",
-              background: "#1e1f22",
-              color: "#fff",
-              fontSize: 15,
-              boxSizing: "border-box",
-              opacity: checking ? 0.6 : 1,
-            }}
-          />
-          {error && (
-            <div style={{ color: "#ed4245", fontSize: 13, marginTop: 6 }}>
-              {errorMsg || "코드가 올바르지 않습니다. 접속이 종료됩니다."}
+
+        <div style={{ display: "flex", gap: 4, background: "#1e1f22", padding: 4, borderRadius: 6 }}>
+          <button onClick={() => setMode("password")} style={tabStyle(mode === "password")}>
+            비밀번호로 로그인
+          </button>
+          <button onClick={() => setMode("license")} style={tabStyle(mode === "license")}>
+            라이선스 코드
+          </button>
+        </div>
+
+        {mode === "license" ? (
+          <div style={{ marginTop: 18 }}>
+            <label style={labelStyle}>License Code</label>
+            <input
+              ref={firstInputRef}
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              placeholder="XXXX-XXXX"
+              disabled={checking}
+              style={inputStyle}
+            />
+            <div style={{ color: "#949ba4", fontSize: 12, marginTop: 6 }}>
+              처음 접속하거나 비밀번호를 잊었다면 관리자에게 받은 코드로 들어오세요.
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div style={{ marginTop: 18 }}>
+            <label style={labelStyle}>이름</label>
+            <input
+              ref={firstInputRef}
+              value={loginName}
+              onChange={(e) => setLoginName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              placeholder="관리자에게 받은 이름"
+              disabled={checking}
+              style={inputStyle}
+            />
+            <label style={{ ...labelStyle, display: "block", marginTop: 14 }}>비밀번호</label>
+            <input
+              type="password"
+              value={loginPw}
+              onChange={(e) => setLoginPw(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              placeholder="••••••••"
+              disabled={checking}
+              style={inputStyle}
+            />
+          </div>
+        )}
+
+        {error && (
+          <div style={{ color: "#ed4245", fontSize: 13, marginTop: 10 }}>
+            {errorMsg || "정보가 올바르지 않습니다."}
+          </div>
+        )}
+
         <button
-          onClick={() => !checking && onSubmit(value.trim())}
+          onClick={submit}
           disabled={checking}
           style={{
             width: "100%",
@@ -537,6 +615,135 @@ function LicenseModal({ onSubmit, error, errorMsg, checking, onClose }) {
           }}
         >
           취소
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- 비밀번호 설정 화면 (라이선스 코드로 처음 들어왔을 때) ----------
+function SetPasswordModal({ userName, onSave, onSkip, saving, errorMsg }) {
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [localErr, setLocalErr] = useState("");
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  function handleSave() {
+    if (pw.length < 4) {
+      setLocalErr("비밀번호는 4자 이상으로 해주세요.");
+      return;
+    }
+    if (pw !== pw2) {
+      setLocalErr("비밀번호가 서로 다릅니다.");
+      return;
+    }
+    setLocalErr("");
+    onSave(pw);
+  }
+
+  const inputStyle = {
+    width: "100%",
+    marginTop: 6,
+    padding: "10px 12px",
+    borderRadius: 4,
+    border: "none",
+    outline: "none",
+    background: "#1e1f22",
+    color: "#fff",
+    fontSize: 15,
+    boxSizing: "border-box",
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 55,
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+      }}
+    >
+      <div
+        style={{
+          background: "#313338",
+          borderRadius: 8,
+          width: 420,
+          maxWidth: "90vw",
+          padding: "32px 28px",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
+        }}
+      >
+        <div style={{ textAlign: "center" }}>
+          <div style={{ color: "#fff", fontSize: 20, fontWeight: 700 }}>비밀번호 설정</div>
+          <div style={{ color: "#b5bac1", fontSize: 14, marginTop: 6 }}>
+            다음부터는 <b>{userName}</b> + 비밀번호로 바로 로그인할 수 있어요
+          </div>
+        </div>
+
+        <div style={{ marginTop: 20 }}>
+          <label style={{ color: "#b5bac1", fontSize: 12, fontWeight: 700 }}>비밀번호</label>
+          <input
+            ref={inputRef}
+            type="password"
+            value={pw}
+            onChange={(e) => setPw(e.target.value)}
+            placeholder="4자 이상"
+            style={inputStyle}
+          />
+          <label style={{ color: "#b5bac1", fontSize: 12, fontWeight: 700, display: "block", marginTop: 14 }}>
+            비밀번호 확인
+          </label>
+          <input
+            type="password"
+            value={pw2}
+            onChange={(e) => setPw2(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSave()}
+            placeholder="다시 입력"
+            style={inputStyle}
+          />
+        </div>
+
+        {(localErr || errorMsg) && (
+          <div style={{ color: "#ed4245", fontSize: 13, marginTop: 10 }}>{localErr || errorMsg}</div>
+        )}
+
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          style={{
+            width: "100%",
+            marginTop: 20,
+            padding: "11px 0",
+            borderRadius: 4,
+            border: "none",
+            background: saving ? "#454a52" : "#5865F2",
+            color: "#fff",
+            fontWeight: 600,
+            fontSize: 15,
+            cursor: saving ? "default" : "pointer",
+          }}
+        >
+          {saving ? "저장 중..." : "비밀번호 설정하고 입장"}
+        </button>
+        <div
+          onClick={onSkip}
+          style={{
+            textAlign: "center",
+            marginTop: 14,
+            color: "#7f8489",
+            fontSize: 13,
+            cursor: "pointer",
+          }}
+        >
+          나중에 하기
         </div>
       </div>
     </div>
@@ -1924,36 +2131,51 @@ function NotConfiguredScreen() {
 
 // ---------- 최상위 앱 ----------
 export default function App() {
-  const [stage, setStage] = useState("gate"); // gate -> licensePrompt -> killed -> chat -> checking
+  // gate -> licensePrompt -> checking -> setPassword -> chat / killed
+  const [stage, setStage] = useState("gate");
   const [licenseError, setLicenseError] = useState(false);
   const [licenseErrorMsg, setLicenseErrorMsg] = useState("");
   const [currentUser, setCurrentUser] = useState(""); // 관리자가 부여한 고유 이름 (@이름)
   const [currentCode, setCurrentCode] = useState(""); // 로그인에 사용한 라이선스 코드
   const [nickname, setNickname] = useState(""); // 채팅에 표시되는 닉네임 (없으면 currentUser 그대로)
   const [isAdmin, setIsAdmin] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
+  const [pwErrorMsg, setPwErrorMsg] = useState("");
 
   if (!CONFIGURED) return <NotConfiguredScreen />;
 
   function handleUnlockAttempt() {
     setLicenseError(false);
+    setLicenseErrorMsg("");
     setStage("licensePrompt");
   }
 
+  function applyUser(match) {
+    setCurrentUser(match.name);
+    setCurrentCode(match.code);
+    setNickname(match.nickname || "");
+    setIsAdmin(Boolean(match.is_admin));
+  }
+
+  // 라이선스 코드로 로그인
   async function handleLicenseSubmit(code) {
     if (!code) return;
     setStage("checking");
     try {
       const rows = await sbSelect(
         "whitelist",
-        `code=eq.${encodeURIComponent(code)}&select=name,code,is_admin,nickname`
+        `code=eq.${encodeURIComponent(code)}&select=name,code,is_admin,nickname,password_hash`
       );
       if (rows.length > 0) {
         const match = rows[0];
-        setCurrentUser(match.name);
-        setCurrentCode(match.code);
-        setNickname(match.nickname || "");
-        setIsAdmin(Boolean(match.is_admin));
-        setStage("chat");
+        applyUser(match);
+        // 비밀번호가 아직 없으면 설정 화면으로, 있으면 바로 입장
+        if (!match.password_hash) {
+          setPwErrorMsg("");
+          setStage("setPassword");
+        } else {
+          setStage("chat");
+        }
       } else {
         // 코드가 틀리면 접속 종료
         setStage("killed");
@@ -1962,6 +2184,65 @@ export default function App() {
       setLicenseError(true);
       setLicenseErrorMsg(`연결 실패: ${e.message}`);
       setStage("licensePrompt");
+    }
+  }
+
+  // 이름 + 비밀번호로 로그인
+  async function handlePasswordSubmit(name, password) {
+    if (!name || !password) {
+      setLicenseError(true);
+      setLicenseErrorMsg("이름과 비밀번호를 모두 입력해주세요.");
+      return;
+    }
+    setStage("checking");
+    try {
+      const rows = await sbSelect(
+        "whitelist",
+        `name=eq.${encodeURIComponent(name)}&select=name,code,is_admin,nickname,password_hash`
+      );
+      if (rows.length === 0) {
+        setLicenseError(true);
+        setLicenseErrorMsg("이름 또는 비밀번호가 올바르지 않습니다.");
+        setStage("licensePrompt");
+        return;
+      }
+      const match = rows[0];
+      if (!match.password_hash) {
+        setLicenseError(true);
+        setLicenseErrorMsg("아직 비밀번호가 설정되지 않았어요. 라이선스 코드로 먼저 접속해주세요.");
+        setStage("licensePrompt");
+        return;
+      }
+      const hash = await hashPassword(match.name, password);
+      if (hash !== match.password_hash) {
+        setLicenseError(true);
+        setLicenseErrorMsg("이름 또는 비밀번호가 올바르지 않습니다.");
+        setStage("licensePrompt");
+        return;
+      }
+      applyUser(match);
+      setStage("chat");
+    } catch (e) {
+      setLicenseError(true);
+      setLicenseErrorMsg(`연결 실패: ${e.message}`);
+      setStage("licensePrompt");
+    }
+  }
+
+  // 비밀번호 최초 설정
+  async function handleSavePassword(password) {
+    setSavingPassword(true);
+    setPwErrorMsg("");
+    try {
+      const hash = await hashPassword(currentUser, password);
+      await sbUpdate("whitelist", `code=eq.${encodeURIComponent(currentCode)}`, {
+        password_hash: hash,
+      });
+      setStage("chat");
+    } catch (e) {
+      setPwErrorMsg(`저장 실패: ${e.message}`);
+    } finally {
+      setSavingPassword(false);
     }
   }
 
@@ -1979,12 +2260,28 @@ export default function App() {
     );
   }
 
+  if (stage === "setPassword") {
+    return (
+      <>
+        <FakeNotFound onUnlock={() => {}} />
+        <SetPasswordModal
+          userName={currentUser}
+          onSave={handleSavePassword}
+          onSkip={() => setStage("chat")}
+          saving={savingPassword}
+          errorMsg={pwErrorMsg}
+        />
+      </>
+    );
+  }
+
   return (
     <>
       <FakeNotFound onUnlock={handleUnlockAttempt} />
       {(stage === "licensePrompt" || stage === "checking") && (
         <LicenseModal
-          onSubmit={handleLicenseSubmit}
+          onSubmitCode={handleLicenseSubmit}
+          onSubmitPassword={handlePasswordSubmit}
           error={licenseError}
           errorMsg={licenseErrorMsg}
           checking={stage === "checking"}
