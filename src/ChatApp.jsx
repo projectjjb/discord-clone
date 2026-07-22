@@ -577,6 +577,10 @@ function LicenseModal({ onSubmitCode, onSubmitPassword, error, errorMsg, checkin
               disabled={checking}
               style={inputStyle}
             />
+            <div style={{ color: "#949ba4", fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
+              비밀번호는 접속 후 왼쪽 아래 <b style={{ color: "#dbdee1" }}>🔑 비밀번호 설정</b>에서
+              정할 수 있어요. 아직 안 정했다면 라이선스 코드 탭으로 들어오세요.
+            </div>
           </div>
         )}
 
@@ -615,135 +619,6 @@ function LicenseModal({ onSubmitCode, onSubmitPassword, error, errorMsg, checkin
           }}
         >
           취소
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------- 비밀번호 설정 화면 (라이선스 코드로 처음 들어왔을 때) ----------
-function SetPasswordModal({ userName, onSave, onSkip, saving, errorMsg }) {
-  const [pw, setPw] = useState("");
-  const [pw2, setPw2] = useState("");
-  const [localErr, setLocalErr] = useState("");
-  const inputRef = useRef(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  function handleSave() {
-    if (pw.length < 4) {
-      setLocalErr("비밀번호는 4자 이상으로 해주세요.");
-      return;
-    }
-    if (pw !== pw2) {
-      setLocalErr("비밀번호가 서로 다릅니다.");
-      return;
-    }
-    setLocalErr("");
-    onSave(pw);
-  }
-
-  const inputStyle = {
-    width: "100%",
-    marginTop: 6,
-    padding: "10px 12px",
-    borderRadius: 4,
-    border: "none",
-    outline: "none",
-    background: "#1e1f22",
-    color: "#fff",
-    fontSize: 15,
-    boxSizing: "border-box",
-  };
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.6)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 55,
-        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
-      }}
-    >
-      <div
-        style={{
-          background: "#313338",
-          borderRadius: 8,
-          width: 420,
-          maxWidth: "90vw",
-          padding: "32px 28px",
-          boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
-        }}
-      >
-        <div style={{ textAlign: "center" }}>
-          <div style={{ color: "#fff", fontSize: 20, fontWeight: 700 }}>비밀번호 설정</div>
-          <div style={{ color: "#b5bac1", fontSize: 14, marginTop: 6 }}>
-            다음부터는 <b>{userName}</b> + 비밀번호로 바로 로그인할 수 있어요
-          </div>
-        </div>
-
-        <div style={{ marginTop: 20 }}>
-          <label style={{ color: "#b5bac1", fontSize: 12, fontWeight: 700 }}>비밀번호</label>
-          <input
-            ref={inputRef}
-            type="password"
-            value={pw}
-            onChange={(e) => setPw(e.target.value)}
-            placeholder="4자 이상"
-            style={inputStyle}
-          />
-          <label style={{ color: "#b5bac1", fontSize: 12, fontWeight: 700, display: "block", marginTop: 14 }}>
-            비밀번호 확인
-          </label>
-          <input
-            type="password"
-            value={pw2}
-            onChange={(e) => setPw2(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSave()}
-            placeholder="다시 입력"
-            style={inputStyle}
-          />
-        </div>
-
-        {(localErr || errorMsg) && (
-          <div style={{ color: "#ed4245", fontSize: 13, marginTop: 10 }}>{localErr || errorMsg}</div>
-        )}
-
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          style={{
-            width: "100%",
-            marginTop: 20,
-            padding: "11px 0",
-            borderRadius: 4,
-            border: "none",
-            background: saving ? "#454a52" : "#5865F2",
-            color: "#fff",
-            fontWeight: 600,
-            fontSize: 15,
-            cursor: saving ? "default" : "pointer",
-          }}
-        >
-          {saving ? "저장 중..." : "비밀번호 설정하고 입장"}
-        </button>
-        <div
-          onClick={onSkip}
-          style={{
-            textAlign: "center",
-            marginTop: 14,
-            color: "#7f8489",
-            fontSize: 13,
-            cursor: "pointer",
-          }}
-        >
-          나중에 하기
         </div>
       </div>
     </div>
@@ -960,6 +835,235 @@ function ProfileModal({ currentUser, nickname, currentColor, onSave, onClose }) 
           }}
         >
           {saving ? "저장 중..." : saved ? "저장됨 ✓" : "프로필 저장"}
+        </button>
+        <div
+          onClick={onClose}
+          style={{
+            textAlign: "center",
+            marginTop: 14,
+            color: "#7f8489",
+            fontSize: 13,
+            cursor: "pointer",
+          }}
+        >
+          닫기
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- 비밀번호 설정 / 변경 ----------
+function PasswordSettingsModal({ currentUser, currentCode, onClose }) {
+  const [hasPassword, setHasPassword] = useState(null); // null = 확인 중
+  const [oldPw, setOldPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [newPw2, setNewPw2] = useState("");
+  const [msg, setMsg] = useState("");
+  const [isError, setIsError] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // 이미 비밀번호가 설정되어 있는지 확인
+  useEffect(() => {
+    let cancelled = false;
+    sbSelect("whitelist", `code=eq.${encodeURIComponent(currentCode)}&select=password_hash`)
+      .then((rows) => {
+        if (!cancelled) setHasPassword(Boolean(rows[0]?.password_hash));
+      })
+      .catch(() => {
+        if (!cancelled) setHasPassword(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentCode]);
+
+  async function handleSave() {
+    setMsg("");
+    setIsError(false);
+
+    if (newPw.length < 4) {
+      setIsError(true);
+      setMsg("비밀번호는 4자 이상으로 해주세요.");
+      return;
+    }
+    if (newPw !== newPw2) {
+      setIsError(true);
+      setMsg("새 비밀번호가 서로 다릅니다.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      // 이미 비밀번호가 있으면 기존 비밀번호를 먼저 확인
+      if (hasPassword) {
+        const rows = await sbSelect(
+          "whitelist",
+          `code=eq.${encodeURIComponent(currentCode)}&select=password_hash`
+        );
+        const oldHash = await hashPassword(currentUser, oldPw);
+        if (oldHash !== rows[0]?.password_hash) {
+          setIsError(true);
+          setMsg("현재 비밀번호가 올바르지 않습니다.");
+          setSaving(false);
+          return;
+        }
+      }
+
+      const hash = await hashPassword(currentUser, newPw);
+      await sbUpdate("whitelist", `code=eq.${encodeURIComponent(currentCode)}`, {
+        password_hash: hash,
+      });
+      setHasPassword(true);
+      setOldPw("");
+      setNewPw("");
+      setNewPw2("");
+      setIsError(false);
+      setMsg("비밀번호가 저장되었습니다 ✓");
+    } catch (e) {
+      setIsError(true);
+      setMsg(`저장 실패: ${e.message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputStyle = {
+    width: "100%",
+    marginTop: 6,
+    padding: "10px 12px",
+    borderRadius: 4,
+    border: "none",
+    outline: "none",
+    background: "#1e1f22",
+    color: "#fff",
+    fontSize: 15,
+    boxSizing: "border-box",
+  };
+
+  const labelStyle = {
+    color: "#b5bac1",
+    fontSize: 12,
+    fontWeight: 700,
+    display: "block",
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 60,
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+      }}
+    >
+      <div
+        style={{
+          background: "#313338",
+          borderRadius: 8,
+          width: 420,
+          maxWidth: "90vw",
+          padding: "28px 26px",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
+        }}
+      >
+        <div style={{ color: "#fff", fontSize: 18, fontWeight: 700 }}>
+          {hasPassword ? "비밀번호 변경" : "비밀번호 설정"}
+        </div>
+        <div style={{ color: "#949ba4", fontSize: 13, marginTop: 6 }}>
+          로그인할 때 <b style={{ color: "#dbdee1" }}>{currentUser}</b> + 비밀번호로 들어올 수 있어요.
+        </div>
+
+        {hasPassword && (
+          <div style={{ marginTop: 18 }}>
+            <label style={labelStyle}>현재 비밀번호</label>
+            <input
+              type="password"
+              value={oldPw}
+              onChange={(e) => setOldPw(e.target.value)}
+              placeholder="현재 비밀번호"
+              style={inputStyle}
+            />
+          </div>
+        )}
+
+        <div style={{ marginTop: 14 }}>
+          <label style={labelStyle}>{hasPassword ? "새 비밀번호" : "비밀번호"}</label>
+          <input
+            type="password"
+            value={newPw}
+            onChange={(e) => setNewPw(e.target.value)}
+            placeholder="4자 이상"
+            style={inputStyle}
+          />
+        </div>
+
+        <div style={{ marginTop: 14 }}>
+          <label style={labelStyle}>비밀번호 확인</label>
+          <input
+            type="password"
+            value={newPw2}
+            onChange={(e) => setNewPw2(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSave()}
+            placeholder="다시 입력"
+            style={inputStyle}
+          />
+        </div>
+
+        <div
+          style={{
+            background: "rgba(237, 66, 69, 0.1)",
+            border: "1px solid rgba(237, 66, 69, 0.4)",
+            borderRadius: 6,
+            padding: "12px 14px",
+            marginTop: 16,
+            color: "#f5a3a5",
+            fontSize: 12,
+            lineHeight: 1.6,
+          }}
+        >
+          <div style={{ color: "#ed4245", fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
+            ⚠️ 주의
+          </div>
+          평소 쓰는 비밀번호를 절대 쓰지 마세요. 이 사이트는 친구들끼리 쓰려고 간단히 만든 거라
+          보안이 약하고, 저장된 비밀번호가 유출될 수 있어요.
+          <b style={{ color: "#f5a3a5" }}> 아무 의미 없는 새 비밀번호</b>로 정해주세요.
+          (예: 게임 캐릭터 이름 + 아무 숫자)
+        </div>
+
+        {msg && (
+          <div
+            style={{
+              color: isError ? "#ed4245" : "#3ba55d",
+              fontSize: 13,
+              marginTop: 10,
+            }}
+          >
+            {msg}
+          </div>
+        )}
+
+        <button
+          onClick={handleSave}
+          disabled={saving || hasPassword === null}
+          style={{
+            width: "100%",
+            marginTop: 18,
+            padding: "11px 0",
+            borderRadius: 4,
+            border: "none",
+            background: saving ? "#454a52" : "#5865F2",
+            color: "#fff",
+            fontWeight: 600,
+            fontSize: 15,
+            cursor: saving ? "default" : "pointer",
+          }}
+        >
+          {saving ? "저장 중..." : hasPassword ? "비밀번호 변경" : "비밀번호 설정"}
         </button>
         <div
           onClick={onClose}
@@ -1226,6 +1330,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const [activeChannel, setActiveChannel] = useState(null);
   const [showAdmin, setShowAdmin] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [profileMap, setProfileMap] = useState({}); // { 원래이름: { nickname, avatar_color } }
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
@@ -1672,6 +1777,25 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
 
         <StorageGauge usageBytes={storageUsage} />
 
+        <div style={{ padding: "8px 8px 0" }}>
+          <button
+            onClick={() => setShowPasswordModal(true)}
+            style={{
+              width: "100%",
+              padding: "9px 0",
+              borderRadius: 4,
+              border: "none",
+              background: "#3f4147",
+              color: "#dbdee1",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            🔑 비밀번호 설정
+          </button>
+        </div>
+
         {isAdmin && (
           <div style={{ padding: 8 }}>
             <button
@@ -1742,6 +1866,14 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
           currentColor={myColor || avatarColor(currentUser)}
           onSave={saveProfile}
           onClose={() => setShowProfile(false)}
+        />
+      )}
+
+      {showPasswordModal && (
+        <PasswordSettingsModal
+          currentUser={currentUser}
+          currentCode={currentCode}
+          onClose={() => setShowPasswordModal(false)}
         />
       )}
 
@@ -2139,8 +2271,6 @@ export default function App() {
   const [currentCode, setCurrentCode] = useState(""); // 로그인에 사용한 라이선스 코드
   const [nickname, setNickname] = useState(""); // 채팅에 표시되는 닉네임 (없으면 currentUser 그대로)
   const [isAdmin, setIsAdmin] = useState(false);
-  const [savingPassword, setSavingPassword] = useState(false);
-  const [pwErrorMsg, setPwErrorMsg] = useState("");
 
   if (!CONFIGURED) return <NotConfiguredScreen />;
 
@@ -2169,13 +2299,7 @@ export default function App() {
       if (rows.length > 0) {
         const match = rows[0];
         applyUser(match);
-        // 비밀번호가 아직 없으면 설정 화면으로, 있으면 바로 입장
-        if (!match.password_hash) {
-          setPwErrorMsg("");
-          setStage("setPassword");
-        } else {
-          setStage("chat");
-        }
+        setStage("chat");
       } else {
         // 코드가 틀리면 접속 종료
         setStage("killed");
@@ -2229,23 +2353,6 @@ export default function App() {
     }
   }
 
-  // 비밀번호 최초 설정
-  async function handleSavePassword(password) {
-    setSavingPassword(true);
-    setPwErrorMsg("");
-    try {
-      const hash = await hashPassword(currentUser, password);
-      await sbUpdate("whitelist", `code=eq.${encodeURIComponent(currentCode)}`, {
-        password_hash: hash,
-      });
-      setStage("chat");
-    } catch (e) {
-      setPwErrorMsg(`저장 실패: ${e.message}`);
-    } finally {
-      setSavingPassword(false);
-    }
-  }
-
   if (stage === "killed") return <KilledScreen />;
 
   if (stage === "chat") {
@@ -2257,21 +2364,6 @@ export default function App() {
         onNicknameChange={setNickname}
         isAdmin={isAdmin}
       />
-    );
-  }
-
-  if (stage === "setPassword") {
-    return (
-      <>
-        <FakeNotFound onUnlock={() => {}} />
-        <SetPasswordModal
-          userName={currentUser}
-          onSave={handleSavePassword}
-          onSkip={() => setStage("chat")}
-          saving={savingPassword}
-          errorMsg={pwErrorMsg}
-        />
-      </>
     );
   }
 
