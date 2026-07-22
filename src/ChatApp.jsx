@@ -929,7 +929,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   function refreshStorageUsage() {
     getStorageUsage()
       .then((bytes) => setStorageUsage(bytes))
-      .catch(() => {});
+      .catch((e) => setConnError(`용량 조회 실패: ${e.message}`));
   }
 
   // 용량 게이지: 최초 로드 + 1분마다 갱신 (모두의 화면에 최신 상태가 보이도록)
