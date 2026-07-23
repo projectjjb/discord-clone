@@ -366,6 +366,77 @@ function initials(name) {
 // ---------- 이모지 리액션 ----------
 const EMOJI_CHOICES = ["👍", "❤️", "🤣", "😮", "😢", "🔥", "🎉", "👀", "🤔", "🖕", "♿", "‼️", "❓", "6️⃣", "7️⃣"];
 
+// :: 자동완성용 이모지 목록 (한글/영문 이름으로 검색 가능)
+const EMOJI_LIST = [
+  { e: "😀", names: ["웃음", "smile", "grin"] },
+  { e: "😂", names: ["웃김", "ㅋㅋ", "joy", "laugh"] },
+  { e: "🤣", names: ["폭소", "ㅋㅋㅋ", "rofl"] },
+  { e: "😊", names: ["미소", "blush", "happy"] },
+  { e: "😍", names: ["사랑", "heart", "love"] },
+  { e: "😎", names: ["선글라스", "cool", "sunglasses"] },
+  { e: "🥹", names: ["감동", "tear"] },
+  { e: "😭", names: ["울음", "슬픔", "cry", "sob"] },
+  { e: "😡", names: ["화남", "angry", "rage"] },
+  { e: "😱", names: ["놀람", "scream", "shock"] },
+  { e: "🤔", names: ["생각", "think", "hmm"] },
+  { e: "😴", names: ["잠", "졸림", "sleep"] },
+  { e: "🤮", names: ["구역질", "vomit"] },
+  { e: "💀", names: ["해골", "죽음", "skull"] },
+  { e: "👍", names: ["좋아요", "따봉", "thumbsup", "good"] },
+  { e: "👎", names: ["싫어요", "thumbsdown", "bad"] },
+  { e: "👏", names: ["박수", "clap"] },
+  { e: "🙏", names: ["부탁", "감사", "pray", "thanks"] },
+  { e: "🖕", names: ["fu", "middlefinger"] },
+  { e: "✌️", names: ["브이", "victory", "peace"] },
+  { e: "🤝", names: ["악수", "handshake"] },
+  { e: "❤️", names: ["하트", "사랑", "heart", "love"] },
+  { e: "💔", names: ["실연", "brokenheart"] },
+  { e: "🔥", names: ["불", "핫", "fire", "hot"] },
+  { e: "✨", names: ["반짝", "sparkles"] },
+  { e: "🎉", names: ["축하", "파티", "party", "tada"] },
+  { e: "🎂", names: ["생일", "케이크", "cake", "birthday"] },
+  { e: "🎁", names: ["선물", "gift"] },
+  { e: "⭐", names: ["별", "star"] },
+  { e: "☀️", names: ["해", "맑음", "sun"] },
+  { e: "🌧️", names: ["비", "rain"] },
+  { e: "❄️", names: ["눈", "snow"] },
+  { e: "🌙", names: ["달", "moon"] },
+  { e: "🍕", names: ["피자", "pizza"] },
+  { e: "🍔", names: ["햄버거", "burger"] },
+  { e: "🍜", names: ["라면", "ramen", "noodle"] },
+  { e: "🍚", names: ["밥", "rice"] },
+  { e: "☕", names: ["커피", "coffee"] },
+  { e: "🍺", names: ["맥주", "beer"] },
+  { e: "🐶", names: ["강아지", "dog"] },
+  { e: "🐱", names: ["고양이", "cat"] },
+  { e: "🐦", names: ["새", "앵무새", "bird"] },
+  { e: "🦊", names: ["여우", "fox"] },
+  { e: "🐼", names: ["판다", "panda"] },
+  { e: "⚽", names: ["축구", "soccer"] },
+  { e: "🏀", names: ["농구", "basketball"] },
+  { e: "🎮", names: ["게임", "game"] },
+  { e: "🎵", names: ["음악", "music"] },
+  { e: "📚", names: ["책", "공부", "book", "study"] },
+  { e: "✏️", names: ["연필", "pencil"] },
+  { e: "💻", names: ["노트북", "코딩", "laptop", "code"] },
+  { e: "📱", names: ["폰", "phone"] },
+  { e: "🤖", names: ["로봇", "robot"] },
+  { e: "🚗", names: ["차", "car"] },
+  { e: "✈️", names: ["비행기", "airplane"] },
+  { e: "🏠", names: ["집", "home"] },
+  { e: "💡", names: ["아이디어", "idea", "bulb"] },
+  { e: "⚡", names: ["번개", "zap"] },
+  { e: "💰", names: ["돈", "money"] },
+  { e: "✅", names: ["체크", "완료", "check", "done"] },
+  { e: "❌", names: ["엑스", "취소", "x", "cancel"] },
+  { e: "⚠️", names: ["경고", "warning"] },
+  { e: "❓", names: ["물음표", "question"] },
+  { e: "‼️", names: ["느낌표", "exclamation"] },
+  { e: "👀", names: ["눈", "봄", "eyes", "look"] },
+  { e: "🙈", names: ["가림", "스포일러", "spoiler", "hide"] },
+  { e: "♿", names: ["휠체어", "장애인"] },
+];
+
 function EmojiPicker({ onPick, onClose, align = "left" }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -1578,12 +1649,14 @@ function SpoilerText({ spoilerKey, children }) {
   );
 }
 
-// 메시지 본문 렌더링 (마크다운 + `스포일러` 처리)
-function MessageBody({ text, messageId }) {
+// 메시지 본문 렌더링 (마크다운 + <스포일러> + @멘션 처리)
+function MessageBody({ text, messageId, mentionNames = [], me = "" }) {
   const ref = useRef(null);
 
   const html = markdownToHtml(text, {
-    backtickAsSpoiler: true,
+    spoilerEnabled: true,
+    mentionNames,
+    me,
     keyPrefix: `msg${messageId}`,
   });
 
@@ -1633,34 +1706,55 @@ function escapeHtml(s) {
 }
 
 // 인라인 서식 처리
-// opts.backtickAsSpoiler: true면 `내용`을 스포일러로, false면 코드로 처리
+// opts.spoilerEnabled: true면 <내용>을 스포일러로 처리 (채팅용)
+// opts.mentionNames: 멘션으로 인식할 이름 목록, opts.me: 나를 멘션했는지 강조용
 function renderInline(text, opts = {}) {
-  const { backtickAsSpoiler = false, keyPrefix = "s" } = opts;
+  const { spoilerEnabled = false, keyPrefix = "s", mentionNames = [], me = "" } = opts;
 
   // 코드/스포일러 안의 내용은 다른 서식이 적용되면 안 되므로 먼저 빼둠
   const holds = [];
   let t = text;
 
-  // 코드블록 안전장치: 백틱 구간 추출
-  t = t.replace(/`([^`]+)`/g, (_, code) => {
-    const i = holds.length;
-    if (backtickAsSpoiler) {
+  // 스포일러 <내용>  (escape 전에 처리해야 함)
+  if (spoilerEnabled) {
+    t = t.replace(/<([^<>\n]+)>/g, (_, inner) => {
+      const i = holds.length;
       holds.push(
         `<span data-spoiler="${keyPrefix}-${i}" style="background:#1a1b1e;color:transparent;border-radius:3px;padding:0 4px;cursor:pointer;user-select:none;box-shadow:inset 0 0 0 1px #111214">${escapeHtml(
-          code
+          inner
         )}</span>`
       );
-    } else {
-      holds.push(
-        `<code style="background:#1e1f22;padding:1px 5px;border-radius:3px;font-family:ui-monospace,Consolas,monospace;font-size:0.9em">${escapeHtml(
-          code
-        )}</code>`
-      );
-    }
+      return `\u0000HOLD${i}\u0000`;
+    });
+  }
+
+  // 인라인 코드 `code`
+  t = t.replace(/`([^`]+)`/g, (_, code) => {
+    const i = holds.length;
+    holds.push(
+      `<code style="background:#1e1f22;padding:1px 5px;border-radius:3px;font-family:ui-monospace,Consolas,monospace;font-size:0.9em">${escapeHtml(
+        code
+      )}</code>`
+    );
     return `\u0000HOLD${i}\u0000`;
   });
 
   t = escapeHtml(t);
+
+  // 멘션 @이름 — 등록된 사용자만 강조
+  if (mentionNames.length > 0) {
+    const sorted = [...mentionNames].sort((a, b) => b.length - a.length);
+    const escaped = sorted.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const mentionRe = new RegExp(`@(${escaped.join("|")})`, "g");
+    t = t.replace(mentionRe, (full, name) => {
+      const isMe = name === me;
+      return `<span style="background:${
+        isMe ? "rgba(250,166,26,0.25)" : "rgba(88,101,242,0.25)"
+      };color:${
+        isMe ? "#faa61a" : "#c9cdfb"
+      };padding:0 3px;border-radius:3px;font-weight:600">@${name}</span>`;
+    });
+  }
 
   // 이미지 ![alt](url) — 링크보다 먼저
   t = t.replace(
@@ -1701,7 +1795,7 @@ function renderInline(text, opts = {}) {
 }
 
 // 마크다운 전체 → HTML
-// opts.backtickAsSpoiler: 채팅에서는 백틱을 스포일러로 처리
+// opts.spoilerEnabled: 채팅에서는 <내용>을 스포일러로 처리
 function markdownToHtml(md, opts = {}) {
   const lines = (md || "").split("\n");
   const out = [];
@@ -2283,8 +2377,22 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     return profileMap[originalName]?.avatar_url || null;
   }
 
+  // 멘션으로 인식할 이름들 (원래 이름 + 설정한 닉네임)
+  const allUserNames = React.useMemo(() => {
+    const names = new Set();
+    Object.entries(profileMap).forEach(([name, p]) => {
+      names.add(name);
+      if (p?.nickname) names.add(p.nickname);
+    });
+    return Array.from(names);
+  }, [profileMap]);
+
   const [pendingImage, setPendingImage] = useState(null); // { file, previewUrl }
   const [pendingImageSpoiler, setPendingImageSpoiler] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null); // 답글 대상 메시지
+  const [showHelp, setShowHelp] = useState(false); // / 명령어 도움말
+  const [emojiSuggest, setEmojiSuggest] = useState(null); // :: 이모지 자동완성
+  const [mentionSuggest, setMentionSuggest] = useState(null); // @ 멘션 자동완성
   const [uploading, setUploading] = useState(false);
   const [openPickerFor, setOpenPickerFor] = useState(null); // 이모지 피커가 열린 메시지 id
   const [hoveredMsg, setHoveredMsg] = useState(null);
@@ -2371,10 +2479,13 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     let cancelled = false;
     sbSelect(
       "messages",
-      `channel_id=eq.${activeChannel}&select=id,author,text,image_url,image_spoiler,reactions,created_at&order=created_at.asc`
+      `channel_id=eq.${activeChannel}&select=id,author,text,image_url,image_spoiler,reactions,created_at,reply_to_id,reply_to_author,reply_to_text&order=created_at.asc`
     )
       .then((rows) => {
-        if (!cancelled) setMessages(rows);
+        if (!cancelled) {
+          setMessages(rows);
+          forceScrollBottom();
+        }
       })
       .catch(() => setConnError("메시지를 불러오지 못했습니다."));
     return () => {
@@ -2405,7 +2516,22 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   }, [activeChannel]);
 
   const scrollToBottom = (smooth = true) => {
-    bottomRef.current?.scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
+    const el = scrollContainerRef.current;
+    if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    } else {
+      bottomRef.current?.scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
+    }
+  };
+
+  // 렌더링/이미지 로딩 타이밍 때문에 한 번만으로는 부족해서 여러 번 시도
+  const forceScrollBottom = () => {
+    isNearBottomRef.current = true;
+    [0, 60, 180, 400, 800].forEach((delay) => {
+      setTimeout(() => {
+        if (isNearBottomRef.current) scrollToBottom(false);
+      }, delay);
+    });
   };
 
   // 메시지가 바뀌면, 사용자가 이미 하단 근처를 보고 있을 때만 따라 내려감
@@ -2415,16 +2541,14 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
       scrollToBottom(true);
       const t = setTimeout(() => {
         if (isNearBottomRef.current) scrollToBottom(false);
-      }, 100);
+      }, 120);
       return () => clearTimeout(t);
     }
   }, [messages]);
 
-  // 채널을 새로 열면 항상 즉시 맨 아래로
+  // 채널을 새로 열거나 처음 접속했을 때 확실히 맨 아래로
   useEffect(() => {
-    isNearBottomRef.current = true;
-    const t = setTimeout(() => scrollToBottom(false), 50);
-    return () => clearTimeout(t);
+    if (activeChannel != null) forceScrollBottom();
   }, [activeChannel]);
 
   // 이미지 정리 (미리보기 URL 메모리 해제)
@@ -2459,9 +2583,23 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     let imageUrl = null;
     const imageToSend = pendingImage;
     const imageSpoiler = pendingImageSpoiler;
+    const reply = replyingTo;
     setInput("");
     setPendingImage(null);
     setPendingImageSpoiler(false);
+    setReplyingTo(null);
+    setShowHelp(false);
+    setEmojiSuggest(null);
+    setMentionSuggest(null);
+
+    // 답글 미리보기용 요약 (원본이 지워져도 남도록 텍스트 일부를 저장)
+    const replyFields = reply
+      ? {
+          reply_to_id: typeof reply.id === "number" ? reply.id : null,
+          reply_to_author: reply.author,
+          reply_to_text: (reply.text || (reply.image_url ? "[사진]" : "")).slice(0, 120),
+        }
+      : {};
 
     // 낙관적 업데이트: 내 화면엔 바로 표시 (이미지는 로컬 미리보기 사용)
     const tempId = `temp-${Date.now()}`;
@@ -2472,8 +2610,10 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
       image_url: imageToSend?.previewUrl || null,
       image_spoiler: imageSpoiler,
       created_at: new Date().toISOString(),
+      ...replyFields,
     };
     setMessages((prev) => [...prev, optimistic]);
+    forceScrollBottom();
 
     try {
       if (imageToSend) {
@@ -2487,6 +2627,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
         text: text || "",
         image_url: imageUrl,
         image_spoiler: imageSpoiler,
+        ...replyFields,
       });
       setMessages((prev) => prev.map((m) => (m.id === tempId ? saved : m)));
       if (imageUrl) {
@@ -2504,6 +2645,73 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   }
 
   const channelName = channels.find((c) => c.id === activeChannel)?.name || "";
+
+  // 입력창 변화에 따라 / 도움말, :: 이모지, @ 멘션 자동완성 표시
+  function handleInputChange(value) {
+    setInput(value);
+
+    // "/" 로 시작하면 명령어 도움말
+    setShowHelp(value.startsWith("/"));
+
+    // "::검색어" 이모지 자동완성
+    const emojiMatch = value.match(/::([\w가-힣]*)$/);
+    if (emojiMatch) {
+      const q = emojiMatch[1].toLowerCase();
+      const list = EMOJI_LIST.filter(
+        (e) => q === "" || e.names.some((n) => n.toLowerCase().includes(q))
+      ).slice(0, 24);
+      setEmojiSuggest({ query: emojiMatch[1], list });
+    } else {
+      setEmojiSuggest(null);
+    }
+
+    // "@검색어" 멘션 자동완성
+    const mentionMatch = value.match(/@([\w가-힣]*)$/);
+    if (mentionMatch) {
+      const q = mentionMatch[1].toLowerCase();
+      const list = allUserNames
+        .filter((n) => q === "" || n.toLowerCase().includes(q))
+        .slice(0, 8);
+      setMentionSuggest(list.length > 0 ? { query: mentionMatch[1], list } : null);
+    } else {
+      setMentionSuggest(null);
+    }
+  }
+
+  function insertEmoji(emoji) {
+    setInput((prev) => prev.replace(/::[\w가-힣]*$/, emoji));
+    setEmojiSuggest(null);
+  }
+
+  function insertMention(name) {
+    setInput((prev) => prev.replace(/@[\w가-힣]*$/, `@${name} `));
+    setMentionSuggest(null);
+  }
+
+  // "/" 명령어 실행
+  function runCommand(raw) {
+    const [cmd, ...rest] = raw.slice(1).split(" ");
+    const arg = rest.join(" ");
+    switch (cmd) {
+      case "spoiler":
+        setInput(`<${arg}>`);
+        return true;
+      case "shrug":
+        setInput(`${arg} ¯\\_(ツ)_/¯`.trim());
+        return true;
+      case "clear":
+        setInput("");
+        setShowHelp(false);
+        return true;
+      case "help":
+        setInput("");
+        setShowHelp(true);
+        return true;
+      default:
+        return false; // 모르는 명령어는 그냥 일반 메시지로 전송
+    }
+  }
+
 
   async function deleteMessage(msg) {
     if (!window.confirm("이 메시지를 삭제할까요?")) return;
@@ -2870,7 +3078,8 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
             const isGrouped =
               prev &&
               prev.author === m.author &&
-              !prev.image_url === !m.image_url && // 그룹 여부와 무관하지만 안전하게 유지
+              !m.reply_to_author && // 답글이면 항상 새 블록으로
+              !prev.image_url === !m.image_url &&
               new Date(m.created_at) - new Date(prev.created_at) < 5 * 60 * 1000;
 
             const reactionList = summarizeReactions(m.reactions, currentUser);
@@ -2882,11 +3091,10 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
             return (
               <div
                 key={m.id}
+                id={`msg-${m.id}`}
                 onMouseEnter={() => setHoveredMsg(m.id)}
                 onMouseLeave={() => setHoveredMsg(null)}
                 style={{
-                  display: "flex",
-                  gap: 12,
                   marginTop: isGrouped ? 2 : 16,
                   padding: "2px 8px",
                   marginLeft: -8,
@@ -2896,6 +3104,53 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                   position: "relative",
                 }}
               >
+                {m.reply_to_author && (
+                  <div
+                    onClick={() => {
+                      const target = document.getElementById(`msg-${m.reply_to_id}`);
+                      if (target) {
+                        target.scrollIntoView({ behavior: "smooth", block: "center" });
+                        target.style.background = "#3c4270";
+                        setTimeout(() => {
+                          target.style.background = "transparent";
+                        }, 1200);
+                      }
+                    }}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      marginLeft: 22,
+                      marginBottom: 2,
+                      color: "#949ba4",
+                      fontSize: 13,
+                      cursor: "pointer",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <span style={{ color: "#4e5058" }}>↳</span>
+                    <Avatar
+                      url={userAvatar(m.reply_to_author)}
+                      color={userColor(m.reply_to_author)}
+                      label={displayName(m.reply_to_author)}
+                      size={16}
+                    />
+                    <span style={{ color: "#b5bac1", fontWeight: 600 }}>
+                      {displayName(m.reply_to_author)}
+                    </span>
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {m.reply_to_text}
+                    </span>
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 12 }}>
                 <div style={{ width: 40, flexShrink: 0 }}>
                   {!isGrouped && (
                     <Avatar
@@ -2925,7 +3180,12 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                   )}
                   {m.text && (
                     <div style={{ color: "#dbdee1", fontSize: 15, marginTop: isGrouped ? 0 : 2, wordBreak: "break-word" }}>
-                      <MessageBody text={m.text} messageId={m.id} />
+                      <MessageBody
+                        text={m.text}
+                        messageId={m.id}
+                        mentionNames={allUserNames}
+                        me={currentUser}
+                      />
                     </div>
                   )}
                   {m.image_url &&
@@ -2990,6 +3250,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                     </div>
                   )}
                 </div>
+                </div>
 
                 {showToolbar && (
                   <div
@@ -3006,6 +3267,20 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                       zIndex: 20,
                     }}
                   >
+                    <button
+                      onClick={() => setReplyingTo(m)}
+                      title="답글"
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: "#dbdee1",
+                        fontSize: 15,
+                        padding: "6px 9px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      ↩️
+                    </button>
                     <div style={{ position: "relative" }}>
                       <button
                         onClick={() => setOpenPickerFor(openPickerFor === m.id ? null : m.id)}
@@ -3056,7 +3331,198 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
           <div ref={bottomRef} />
         </div>
 
-        <div style={{ padding: "0 16px 24px" }}>
+        <div style={{ padding: "0 16px 24px", position: "relative" }}>
+          {/* / 명령어 도움말 */}
+          {showHelp && (
+            <div
+              style={{
+                position: "absolute",
+                bottom: "100%",
+                left: 16,
+                right: 16,
+                background: "#2b2d31",
+                borderRadius: 8,
+                padding: 14,
+                marginBottom: 8,
+                boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+                maxHeight: 320,
+                overflowY: "auto",
+                zIndex: 40,
+              }}
+            >
+              <div style={{ color: "#fff", fontWeight: 700, fontSize: 14, marginBottom: 8 }}>
+                명령어 & 사용법
+              </div>
+              {[
+                ["/help", "이 도움말 보기"],
+                ["/spoiler 내용", "스포일러로 감싸기"],
+                ["/shrug", "¯\\_(ツ)_/¯ 붙이기"],
+                ["/clear", "입력창 비우기"],
+              ].map(([cmd, desc]) => (
+                <div key={cmd} style={{ display: "flex", gap: 10, marginBottom: 4, fontSize: 13 }}>
+                  <code style={{ color: "#00a8fc", minWidth: 110 }}>{cmd}</code>
+                  <span style={{ color: "#b5bac1" }}>{desc}</span>
+                </div>
+              ))}
+              <div
+                style={{
+                  color: "#fff",
+                  fontWeight: 700,
+                  fontSize: 14,
+                  margin: "12px 0 8px",
+                  borderTop: "1px solid #3f4147",
+                  paddingTop: 10,
+                }}
+              >
+                채팅 문법
+              </div>
+              {[
+                ["<내용>", "스포일러 (클릭하면 열림)"],
+                ["@이름", "멘션"],
+                ["**굵게**", "굵은 글씨"],
+                ["*기울임*", "기울인 글씨"],
+                ["~~취소선~~", "취소선"],
+                ["==형광펜==", "하이라이트"],
+                ["`코드`", "인라인 코드"],
+                ["# 제목", "제목 (1~6단계)"],
+                ["- 목록", "글머리 목록"],
+                ["- [ ] 할일", "체크리스트"],
+                ["> 인용", "인용문"],
+                ["[글자](주소)", "링크"],
+                ["::검색어", "이모지 찾기"],
+              ].map(([syntax, desc]) => (
+                <div key={syntax} style={{ display: "flex", gap: 10, marginBottom: 4, fontSize: 13 }}>
+                  <code style={{ color: "#faa61a", minWidth: 110 }}>{syntax}</code>
+                  <span style={{ color: "#b5bac1" }}>{desc}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* :: 이모지 자동완성 */}
+          {emojiSuggest && emojiSuggest.list.length > 0 && (
+            <div
+              style={{
+                position: "absolute",
+                bottom: "100%",
+                left: 16,
+                background: "#2b2d31",
+                borderRadius: 8,
+                padding: 8,
+                marginBottom: 8,
+                boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+                display: "grid",
+                gridTemplateColumns: "repeat(8, 1fr)",
+                gap: 2,
+                zIndex: 40,
+              }}
+            >
+              {emojiSuggest.list.map((item) => (
+                <button
+                  key={item.e}
+                  onClick={() => insertEmoji(item.e)}
+                  title={item.names.join(", ")}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    fontSize: 20,
+                    cursor: "pointer",
+                    padding: "6px 8px",
+                    borderRadius: 4,
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#3f4147")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  {item.e}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* @ 멘션 자동완성 */}
+          {mentionSuggest && (
+            <div
+              style={{
+                position: "absolute",
+                bottom: "100%",
+                left: 16,
+                minWidth: 200,
+                background: "#2b2d31",
+                borderRadius: 8,
+                padding: 6,
+                marginBottom: 8,
+                boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+                zIndex: 40,
+              }}
+            >
+              {mentionSuggest.list.map((name) => (
+                <div
+                  key={name}
+                  onClick={() => insertMention(name)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "6px 8px",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                    color: "#dbdee1",
+                    fontSize: 14,
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#3f4147")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <Avatar url={userAvatar(name)} color={userColor(name)} label={name} size={20} />
+                  {name}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 답글 대상 표시 */}
+          {replyingTo && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                background: "#2b2d31",
+                borderRadius: "8px 8px 0 0",
+                padding: "8px 12px",
+                color: "#949ba4",
+                fontSize: 13,
+              }}
+            >
+              <span>
+                <b style={{ color: "#dbdee1" }}>{displayName(replyingTo.author)}</b>
+                에게 답장
+              </span>
+              <span
+                style={{
+                  flex: 1,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  color: "#6d6f78",
+                }}
+              >
+                {replyingTo.text || (replyingTo.image_url ? "[사진]" : "")}
+              </span>
+              <button
+                onClick={() => setReplyingTo(null)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#949ba4",
+                  cursor: "pointer",
+                  fontSize: 14,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {pendingImage && (
             <div
               style={{
@@ -3142,10 +3608,36 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
             </button>
             <input
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+              onChange={(e) => handleInputChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setShowHelp(false);
+                  setEmojiSuggest(null);
+                  setMentionSuggest(null);
+                  setReplyingTo(null);
+                  return;
+                }
+                if (e.key !== "Enter") return;
+                // 이모지/멘션 자동완성이 떠 있으면 첫 항목 선택
+                if (emojiSuggest?.list?.length) {
+                  e.preventDefault();
+                  insertEmoji(emojiSuggest.list[0].e);
+                  return;
+                }
+                if (mentionSuggest?.list?.length) {
+                  e.preventDefault();
+                  insertMention(mentionSuggest.list[0]);
+                  return;
+                }
+                // "/" 명령어면 실행하고 전송하지 않음
+                if (input.startsWith("/") && runCommand(input)) {
+                  e.preventDefault();
+                  return;
+                }
+                sendMessage();
+              }}
               placeholder={
-                uploading ? "이미지 업로드 중..." : `#${channelName}에 메시지 보내기`
+                uploading ? "이미지 업로드 중..." : `#${channelName}에 메시지 보내기  ( / 입력하면 도움말 )`
               }
               disabled={uploading}
               style={{
@@ -3160,9 +3652,9 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
             />
             <button
               onClick={() => {
-                setInput((prev) => prev + "`내용`");
+                setInput((prev) => prev + "<내용>");
               }}
-              title="스포일러 (`내용`)"
+              title="스포일러"
               style={{
                 background: "transparent",
                 border: "none",
