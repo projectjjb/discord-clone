@@ -2007,6 +2007,166 @@ function formatTime(iso) {
   }
 }
 
+// ---------- 문서 트리 (재귀 렌더링) ----------
+function DocTree({
+  docs,
+  parentId,
+  depth,
+  expanded,
+  setExpanded,
+  activeDocId,
+  onSelect,
+  onDelete,
+  onCreateDoc,
+  onCreateFolder,
+  onMove,
+  dragId,
+  setDragId,
+}) {
+  const children = docs.filter((d) => (d.parent_id ?? null) === parentId);
+  if (children.length === 0) return null;
+
+  return (
+    <>
+      {children.map((d) => {
+        const isFolder = d.is_folder;
+        const isOpen = expanded[d.id];
+        const isActive = activeDocId === d.id;
+
+        return (
+          <div key={d.id}>
+            <div
+              draggable
+              onDragStart={(e) => {
+                e.stopPropagation();
+                setDragId(d.id);
+              }}
+              onDragOver={(e) => {
+                if (isFolder) e.preventDefault();
+              }}
+              onDrop={(e) => {
+                if (!isFolder) return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (dragId != null) onMove(dragId, d.id);
+                setDragId(null);
+              }}
+              onClick={() => {
+                if (isFolder) setExpanded((p) => ({ ...p, [d.id]: !p[d.id] }));
+                else onSelect(d.id);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "6px 8px",
+                paddingLeft: 8 + depth * 14,
+                borderRadius: 4,
+                marginBottom: 1,
+                cursor: "pointer",
+                background: isActive ? "#3f4248" : "transparent",
+                color: isActive ? "#fff" : "#949ba4",
+                fontSize: 14,
+                opacity: dragId === d.id ? 0.4 : 1,
+              }}
+              onMouseEnter={(e) => {
+                if (!isActive) e.currentTarget.style.background = "#35373c";
+              }}
+              onMouseLeave={(e) => {
+                if (!isActive) e.currentTarget.style.background = "transparent";
+              }}
+            >
+              {/* 펼침 화살표 */}
+              <span
+                style={{
+                  width: 12,
+                  flexShrink: 0,
+                  fontSize: 10,
+                  color: "#6d6f78",
+                  transform: isOpen ? "rotate(90deg)" : "none",
+                  transition: "transform 0.12s",
+                }}
+              >
+                {isFolder ? "▶" : ""}
+              </span>
+
+              <span style={{ flexShrink: 0, fontSize: 14 }}>{isFolder ? (isOpen ? "📂" : "📁") : "📄"}</span>
+
+              <span
+                style={{
+                  flex: 1,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  fontWeight: isFolder ? 600 : 400,
+                }}
+              >
+                {d.title}
+              </span>
+
+              {/* 폴더면 안에 새로 만들기 버튼 */}
+              {isFolder && (
+                <>
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCreateDoc(d.id);
+                    }}
+                    title="이 폴더에 문서 추가"
+                    style={{ color: "#6d6f78", fontSize: 13, padding: "0 3px" }}
+                  >
+                    ＋
+                  </span>
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCreateFolder(d.id);
+                    }}
+                    title="하위 폴더 추가"
+                    style={{ color: "#6d6f78", fontSize: 11, padding: "0 3px" }}
+                  >
+                    📁
+                  </span>
+                </>
+              )}
+
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(d);
+                }}
+                title="삭제"
+                style={{ color: "#ed4245", fontSize: 12, padding: "0 3px", flexShrink: 0 }}
+              >
+                ✕
+              </span>
+            </div>
+
+            {/* 하위 항목 */}
+            {isFolder && isOpen && (
+              <DocTree
+                docs={docs}
+                parentId={d.id}
+                depth={depth + 1}
+                expanded={expanded}
+                setExpanded={setExpanded}
+                activeDocId={activeDocId}
+                onSelect={onSelect}
+                onDelete={onDelete}
+                onCreateDoc={onCreateDoc}
+                onCreateFolder={onCreateFolder}
+                onMove={onMove}
+                dragId={dragId}
+                setDragId={setDragId}
+              />
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 // ---------- 공유 문서 뷰 ----------
 function DocsView({ currentUser, serverName }) {
   const [docs, setDocs] = useState([]);
@@ -2014,6 +2174,8 @@ function DocsView({ currentUser, serverName }) {
   const [content, setContent] = useState("");
   const [title, setTitle] = useState("");
   const [mode, setMode] = useState("split"); // split / edit / preview
+  const [expanded, setExpanded] = useState({}); // 펼쳐진 폴더
+  const [dragId, setDragId] = useState(null); // 드래그 중인 항목
   const [loading, setLoading] = useState(true);
   const [savedAt, setSavedAt] = useState("");
   const [err, setErr] = useState("");
@@ -2023,7 +2185,7 @@ function DocsView({ currentUser, serverName }) {
 
   // 문서 목록 로드
   function loadDocs(selectFirst = false) {
-    sbSelect("documents", "select=id,title,updated_at&order=updated_at.desc")
+    sbSelect("documents", "select=id,title,updated_at,parent_id,is_folder&order=is_folder.desc,title.asc")
       .then((rows) => {
         setDocs(rows);
         if (selectFirst && rows.length > 0 && activeDocId == null) {
@@ -2102,10 +2264,16 @@ function DocsView({ currentUser, serverName }) {
     }
   }
 
-  async function createDoc() {
+  async function createDoc(parentId = null) {
     try {
-      const [saved] = await sbInsert("documents", { title: "제목 없는 문서", content: "" });
-      setDocs((prev) => [saved, ...prev]);
+      const [saved] = await sbInsert("documents", {
+        title: "제목 없는 문서",
+        content: "",
+        parent_id: parentId,
+        is_folder: false,
+      });
+      setDocs((prev) => [...prev, saved]);
+      if (parentId) setExpanded((p) => ({ ...p, [parentId]: true }));
       setActiveDocId(saved.id);
       setTitle(saved.title);
       setContent("");
@@ -2114,18 +2282,65 @@ function DocsView({ currentUser, serverName }) {
     }
   }
 
-  async function deleteDoc(id) {
-    if (!window.confirm("이 문서를 삭제할까요? 모두에게서 사라집니다.")) return;
+  async function createFolder(parentId = null) {
+    const name = window.prompt("폴더 이름을 입력하세요", "새 폴더");
+    if (!name) return;
     try {
-      await sbDelete("documents", `id=eq.${id}`);
-      setDocs((prev) => prev.filter((d) => d.id !== id));
-      if (activeDocId === id) {
+      const [saved] = await sbInsert("documents", {
+        title: name,
+        content: "",
+        parent_id: parentId,
+        is_folder: true,
+      });
+      setDocs((prev) => [...prev, saved]);
+      setExpanded((p) => ({ ...p, [saved.id]: true }));
+    } catch (e) {
+      setErr(`폴더 생성 실패: ${e.message}`);
+    }
+  }
+
+  async function deleteDoc(item) {
+    const isFolder = item.is_folder;
+    const msg = isFolder
+      ? `폴더 '${item.title}'을(를) 삭제할까요?\n안에 있는 문서도 모두 사라집니다.`
+      : "이 문서를 삭제할까요? 모두에게서 사라집니다.";
+    if (!window.confirm(msg)) return;
+    try {
+      await sbDelete("documents", `id=eq.${item.id}`);
+      // 하위 항목도 화면에서 제거 (DB는 cascade로 자동 삭제됨)
+      const removeIds = new Set([item.id]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        docs.forEach((d) => {
+          if (d.parent_id && removeIds.has(d.parent_id) && !removeIds.has(d.id)) {
+            removeIds.add(d.id);
+            changed = true;
+          }
+        });
+      }
+      setDocs((prev) => prev.filter((d) => !removeIds.has(d.id)));
+      if (removeIds.has(activeDocId)) {
         setActiveDocId(null);
         setContent("");
         setTitle("");
       }
     } catch (e) {
       setErr(`삭제 실패: ${e.message}`);
+    }
+  }
+
+  // 문서를 다른 폴더로 이동
+  async function moveDoc(docId, newParentId) {
+    if (docId === newParentId) return;
+    try {
+      await sbUpdate("documents", `id=eq.${docId}`, { parent_id: newParentId });
+      setDocs((prev) =>
+        prev.map((d) => (d.id === docId ? { ...d, parent_id: newParentId } : d))
+      );
+      if (newParentId) setExpanded((p) => ({ ...p, [newParentId]: true }));
+    } catch (e) {
+      setErr(`이동 실패: ${e.message}`);
     }
   }
 
@@ -2155,11 +2370,11 @@ function DocsView({ currentUser, serverName }) {
         >
           {serverName}
         </div>
-        <div style={{ padding: 8 }}>
+        <div style={{ padding: 8, display: "flex", gap: 6 }}>
           <button
-            onClick={createDoc}
+            onClick={() => createDoc(null)}
             style={{
-              width: "100%",
+              flex: 1,
               padding: "9px 0",
               borderRadius: 4,
               border: "none",
@@ -2170,43 +2385,56 @@ function DocsView({ currentUser, serverName }) {
               cursor: "pointer",
             }}
           >
-            + 새 문서
+            + 문서
+          </button>
+          <button
+            onClick={() => createFolder(null)}
+            title="새 폴더"
+            style={{
+              padding: "9px 12px",
+              borderRadius: 4,
+              border: "none",
+              background: "#4e5058",
+              color: "#fff",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            + 폴더
           </button>
         </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 8px" }}>
+
+        <div
+          style={{ flex: 1, overflowY: "auto", padding: "0 8px 12px" }}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            if (dragId != null) moveDoc(dragId, null); // 빈 곳에 놓으면 최상위로
+            setDragId(null);
+          }}
+        >
           {loading && <div style={{ color: "#6d6f78", fontSize: 13, padding: 8 }}>불러오는 중...</div>}
-          {docs.map((d) => (
-            <div
-              key={d.id}
-              onClick={() => setActiveDocId(d.id)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "8px 10px",
-                borderRadius: 4,
-                marginBottom: 2,
-                cursor: "pointer",
-                background: activeDocId === d.id ? "#3f4248" : "transparent",
-                color: activeDocId === d.id ? "#fff" : "#949ba4",
-                fontSize: 14,
-              }}
-            >
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                📄 {d.title}
-              </span>
-              <span
-                onClick={(e) => {
-                  e.stopPropagation();
-                  deleteDoc(d.id);
-                }}
-                title="삭제"
-                style={{ color: "#ed4245", fontSize: 12, marginLeft: 6, flexShrink: 0 }}
-              >
-                ✕
-              </span>
+          {!loading && docs.length === 0 && (
+            <div style={{ color: "#6d6f78", fontSize: 13, padding: 8 }}>
+              문서가 없습니다. 위에서 새로 만들어보세요.
             </div>
-          ))}
+          )}
+          <DocTree
+            docs={docs}
+            parentId={null}
+            depth={0}
+            expanded={expanded}
+            setExpanded={setExpanded}
+            activeDocId={activeDocId}
+            onSelect={setActiveDocId}
+            onDelete={deleteDoc}
+            onCreateDoc={createDoc}
+            onCreateFolder={createFolder}
+            onMove={moveDoc}
+            dragId={dragId}
+            setDragId={setDragId}
+          />
         </div>
       </div>
 
@@ -2575,6 +2803,384 @@ function GuideModal({ onClose }) {
   );
 }
 
+// ---------- 모든 기능 보기 ----------
+const FEATURE_SECTIONS = [
+  {
+    icon: "🔐",
+    title: "접속 · 계정",
+    items: [
+      ["가짜 404 화면", "겉보기엔 평범한 오류 페이지"],
+      ["숨겨진 진입", "키보드로 6→7 입력, 또는 'The' 두 번 탭(모바일)"],
+      ["라이선스 코드 로그인", "관리자가 발급한 코드로 첫 접속"],
+      ["비밀번호 로그인", "이름 + 비밀번호로 간편 접속"],
+      ["비밀번호 설정 / 변경", "언제든 마이페이지에서 변경"],
+      ["잘못된 코드 차단", "틀리면 즉시 접속 종료 화면"],
+      ["JSDCH.INC 인트로", "로그인 성공 시 등장하는 인트로"],
+      ["내 계정 삭제", "본인이 직접 계정 삭제 가능"],
+    ],
+  },
+  {
+    icon: "👑",
+    title: "관리자",
+    items: [
+      ["화이트리스트 관리", "사용자 추가 시 랜덤 코드 자동 발급"],
+      ["코드 복사", "발급된 코드를 클릭 한 번으로 복사"],
+      ["사용자 삭제", "관리자가 다른 사용자 제거 (본인은 불가)"],
+      ["관리자 배지", "목록에서 관리자·본인 구분 표시"],
+    ],
+  },
+  {
+    icon: "💬",
+    title: "채팅",
+    items: [
+      ["실시간 메시지", "보내는 즉시 모두의 화면에 표시"],
+      ["여러 채널", "#일반, #공지 등 채널 분리"],
+      ["연속 메시지 묶기", "같은 사람이 5분 내 연속 전송 시 압축 표시"],
+      ["답글", "특정 메시지에 답장, 클릭 시 원본으로 이동"],
+      ["멘션 @이름", "자동완성 지원, 나를 부르면 주황색 강조"],
+      ["이모지 리액션", "메시지에 반응 추가, 인원수 집계"],
+      ["메시지 삭제", "본인이 쓴 메시지만 삭제 가능"],
+      ["최신 메시지로 가기", "위로 올라가면 화살표 버튼 등장"],
+      ["프로필 팝업", "아바타 클릭 시 온라인 상태 확인"],
+    ],
+  },
+  {
+    icon: "🙈",
+    title: "스포일러",
+    items: [
+      ["텍스트 스포일러", "<내용> 으로 감싸면 가려짐"],
+      ["사진 스포일러", "첨부 시 스포일러 버튼으로 지정"],
+      ["개별 공개", "누른 사람 화면에서만 열림"],
+      ["Tab 전체 보기", "Tab 키를 누르는 동안 전부 공개"],
+    ],
+  },
+  {
+    icon: "✍️",
+    title: "마크다운",
+    items: [
+      ["글자 꾸미기", "굵게 · 기울임 · 취소선 · 형광펜 · 코드"],
+      ["제목", "# 부터 ###### 까지 6단계"],
+      ["목록", "글머리 · 번호 · 체크박스 · 중첩"],
+      ["인용문 · 구분선", "> 인용, --- 구분선"],
+      ["표", "| 로 구분하는 표 작성"],
+      ["코드 블록", "``` 로 감싸는 여러 줄 코드"],
+      ["링크 · 이미지", "자동 링크 변환 포함"],
+    ],
+  },
+  {
+    icon: "🖼️",
+    title: "사진 · 파일",
+    items: [
+      ["사진 첨부", "PNG · JPG · GIF · WEBP, 최대 8MB"],
+      ["자동 압축", "업로드 전 최적화로 용량 절약"],
+      ["이미지 링크 미리보기", "주소만 붙여넣어도 사진으로 표시"],
+      ["저장공간 게이지", "사이드바에서 사용량 확인"],
+      ["오래된 사진 자동 정리", "한도의 90% 도달 시 오래된 것부터 삭제"],
+    ],
+  },
+  {
+    icon: "😀",
+    title: "이모지",
+    items: [
+      ["이모지 검색", ":하트 처럼 입력해 한글·영어로 검색"],
+      ["단축코드 변환", ":heart: 형태로 보내면 자동 변환"],
+      ["이모지 팔레트", "입력창 옆 버튼으로 선택"],
+    ],
+  },
+  {
+    icon: "👤",
+    title: "프로필",
+    items: [
+      ["닉네임", "각자 자유롭게 변경, 모두에게 반영"],
+      ["프로필 사진", "직접 업로드"],
+      ["프로필 색상", "10가지 색상 선택"],
+      ["온라인 표시", "초록 · 회색 동그라미로 접속 상태"],
+    ],
+  },
+  {
+    icon: "📄",
+    title: "공유 문서",
+    items: [
+      ["실시간 공동 편집", "여러 명이 같은 문서를 동시에 수정"],
+      ["폴더 트리 구조", "폴더로 문서를 정리"],
+      ["분할 화면", "작성하면서 결과를 실시간 확인"],
+      ["자동 저장", "입력을 멈추면 자동으로 저장"],
+      ["문서 생성 · 삭제", "자유롭게 추가하고 정리"],
+    ],
+  },
+  {
+    icon: "🎮",
+    title: "게임",
+    items: [
+      ["스네이크 하드코어", "속도 제한 없이 최대 8배까지 가속"],
+      ["실시간 랭킹", "친구들과 순위 경쟁, TOP 10 표시"],
+      ["스킨 선택", "5가지 색상"],
+    ],
+  },
+  {
+    icon: "⚙️",
+    title: "기타",
+    items: [
+      ["서버 이름 변경", "아무나 클릭해서 수정 가능"],
+      ["명령어", "/help, /spoiler, /shrug, /clear"],
+      ["사용법 안내", "문법 치트시트 제공"],
+      ["마이페이지", "설정을 한 곳에서 관리"],
+    ],
+  },
+];
+
+function FeatureListModal({ onClose }) {
+  const total = FEATURE_SECTIONS.reduce((n, s) => n + s.items.length, 0);
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 75,
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+      }}
+    >
+      <div
+        style={{
+          background: "#313338",
+          borderRadius: 8,
+          width: 620,
+          maxWidth: "94vw",
+          maxHeight: "88vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
+        }}
+      >
+        <div style={{ padding: "22px 26px 16px", borderBottom: "1px solid #26272b" }}>
+          <div style={{ color: "#fff", fontSize: 20, fontWeight: 700 }}>모든 기능</div>
+          <div style={{ color: "#949ba4", fontSize: 13, marginTop: 4 }}>
+            지금까지 만들어진 기능 {total}가지
+          </div>
+        </div>
+
+        <div style={{ overflowY: "auto", padding: "18px 26px", flex: 1 }}>
+          {FEATURE_SECTIONS.map((sec) => (
+            <div key={sec.title} style={{ marginBottom: 24 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginBottom: 10,
+                }}
+              >
+                <span style={{ fontSize: 18 }}>{sec.icon}</span>
+                <span style={{ color: "#fff", fontSize: 15, fontWeight: 700 }}>{sec.title}</span>
+                <span
+                  style={{
+                    color: "#6d6f78",
+                    fontSize: 11,
+                    background: "#2b2d31",
+                    padding: "2px 7px",
+                    borderRadius: 10,
+                  }}
+                >
+                  {sec.items.length}
+                </span>
+              </div>
+              {sec.items.map(([name, desc]) => (
+                <div
+                  key={name}
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    padding: "7px 0 7px 26px",
+                    borderBottom: "1px solid #2b2d31",
+                    fontSize: 13,
+                  }}
+                >
+                  <span style={{ color: "#dbdee1", fontWeight: 600, minWidth: 170 }}>{name}</span>
+                  <span style={{ color: "#949ba4", flex: 1 }}>{desc}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ padding: "14px 26px", borderTop: "1px solid #26272b" }}>
+          <button
+            onClick={onClose}
+            style={{
+              width: "100%",
+              padding: "10px 0",
+              borderRadius: 4,
+              border: "none",
+              background: "#4e5058",
+              color: "#fff",
+              fontWeight: 600,
+              fontSize: 14,
+              cursor: "pointer",
+            }}
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- 사용자 프로필 팝업 (채팅에서 아바타/이름 클릭 시) ----------
+function UserPopup({ user, onClose, onMention }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    }
+    function handleEsc(e) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleEsc);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleEsc);
+    };
+  }, [onClose]);
+
+  const { name, display, avatarUrl, color, online, lastSeen, isAdmin } = user;
+
+  function formatLastSeen(iso) {
+    if (!iso) return "접속 기록 없음";
+    const diff = Date.now() - new Date(iso).getTime();
+    const min = Math.floor(diff / 60000);
+    if (min < 1) return "방금 전 접속";
+    if (min < 60) return `${min}분 전 접속`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}시간 전 접속`;
+    return `${Math.floor(hr / 24)}일 전 접속`;
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(0,0,0,0.35)",
+        zIndex: 80,
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+      }}
+    >
+      <div
+        ref={ref}
+        style={{
+          width: 300,
+          maxWidth: "88vw",
+          background: "#232428",
+          borderRadius: 10,
+          overflow: "hidden",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+        }}
+      >
+        {/* 배너 */}
+        <div style={{ height: 60, background: color }} />
+
+        <div style={{ padding: "0 16px 16px", marginTop: -32 }}>
+          <div style={{ position: "relative", width: 72, marginBottom: 10 }}>
+            <div
+              style={{
+                width: 72,
+                height: 72,
+                borderRadius: "50%",
+                border: "6px solid #232428",
+                boxSizing: "border-box",
+                overflow: "hidden",
+                background: "#232428",
+              }}
+            >
+              <Avatar url={avatarUrl} color={color} label={display} size={60} />
+            </div>
+            <span
+              title={online ? "온라인" : "오프라인"}
+              style={{
+                position: "absolute",
+                right: 0,
+                bottom: 2,
+                width: 14,
+                height: 14,
+                borderRadius: "50%",
+                background: online ? "#23a55a" : "#80848e",
+                border: "4px solid #232428",
+                boxSizing: "content-box",
+              }}
+            />
+          </div>
+
+          <div style={{ background: "#111214", borderRadius: 8, padding: "12px 14px" }}>
+            <div style={{ color: "#fff", fontSize: 18, fontWeight: 700 }}>{display}</div>
+            <div style={{ color: "#b5bac1", fontSize: 13, marginTop: 1 }}>@{name}</div>
+
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                marginTop: 10,
+                paddingTop: 10,
+                borderTop: "1px solid #2b2d31",
+                fontSize: 12,
+              }}
+            >
+              <span
+                style={{
+                  width: 9,
+                  height: 9,
+                  borderRadius: "50%",
+                  background: online ? "#23a55a" : "#80848e",
+                  flexShrink: 0,
+                }}
+              />
+              <span style={{ color: online ? "#23a55a" : "#949ba4", fontWeight: 600 }}>
+                {online ? "온라인" : "오프라인"}
+              </span>
+              {!online && (
+                <span style={{ color: "#6d6f78" }}>· {formatLastSeen(lastSeen)}</span>
+              )}
+              {isAdmin && <span style={{ color: "#faa61a", marginLeft: "auto" }}>관리자</span>}
+            </div>
+          </div>
+
+          <button
+            onClick={() => {
+              onMention(name);
+              onClose();
+            }}
+            style={{
+              width: "100%",
+              marginTop: 12,
+              padding: "9px 0",
+              borderRadius: 4,
+              border: "none",
+              background: "#4e5058",
+              color: "#fff",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            @ 멘션하기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------- 마이페이지 (설정 허브) ----------
 function MyPageModal({
   currentUser,
@@ -2586,6 +3192,7 @@ function MyPageModal({
   onOpenProfile,
   onOpenPassword,
   onOpenGuide,
+  onOpenFeatures,
   onClose,
 }) {
   const [deleting, setDeleting] = useState(false);
@@ -2595,6 +3202,7 @@ function MyPageModal({
     { icon: "👤", label: "프로필 수정", desc: "닉네임 · 프로필 사진 · 색상", action: onOpenProfile },
     { icon: "🔑", label: "비밀번호", desc: "설정하거나 변경하기", action: onOpenPassword },
     { icon: "📖", label: "사용법", desc: "채팅 · 문서 문법 전체 보기", action: onOpenGuide },
+    { icon: "✨", label: "모든 기능 보기", desc: "이 사이트가 할 수 있는 것들", action: onOpenFeatures },
   ];
 
   async function deleteMyAccount() {
@@ -2963,6 +3571,8 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [showMyPage, setShowMyPage] = useState(false);
+  const [popupUser, setPopupUser] = useState(null);
+  const [showFeatures, setShowFeatures] = useState(false);
 
   // Tab 키를 누르고 있는 동안 스포일러 전체 보기
   useTabRevealSpoilers();
@@ -2979,9 +3589,9 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const [myColor, setMyColor] = useState(null);
   const [myAvatarUrl, setMyAvatarUrl] = useState(null);
 
-  // 전체 사용자 프로필(닉네임/색상/사진) 로드 — 다른 사람이 바꾼 것도 반영되도록 주기적으로 갱신
+  // 전체 사용자 프로필(닉네임/색상/사진/접속시각) 로드
   function refreshProfiles() {
-    sbSelect("whitelist", "select=name,nickname,avatar_color,avatar_url")
+    sbSelect("whitelist", "select=name,nickname,avatar_color,avatar_url,last_seen")
       .then((rows) => {
         const map = {};
         rows.forEach((r) => {
@@ -2989,6 +3599,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
             nickname: r.nickname,
             avatar_color: r.avatar_color,
             avatar_url: r.avatar_url,
+            last_seen: r.last_seen,
           };
         });
         setProfileMap(map);
@@ -2998,6 +3609,19 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
       })
       .catch(() => {});
   }
+
+  // 내 접속 시각을 주기적으로 갱신 (다른 사람에게 온라인으로 보이도록)
+  useEffect(() => {
+    if (!currentCode) return;
+    function beat() {
+      sbUpdate("whitelist", `code=eq.${encodeURIComponent(currentCode)}`, {
+        last_seen: new Date().toISOString(),
+      }).catch(() => {});
+    }
+    beat();
+    const interval = setInterval(beat, 30000); // 30초마다
+    return () => clearInterval(interval);
+  }, [currentCode]);
 
   useEffect(() => {
     refreshProfiles();
@@ -3034,6 +3658,14 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
 
   function userAvatar(originalName) {
     return profileMap[originalName]?.avatar_url || null;
+  }
+
+  // 마지막 접속이 2분 이내면 온라인으로 간주
+  function isUserOnline(originalName) {
+    if (originalName === currentUser) return true;
+    const seen = profileMap[originalName]?.last_seen;
+    if (!seen) return false;
+    return Date.now() - new Date(seen).getTime() < 120000;
   }
 
   // 멘션으로 인식할 이름들 (원래 이름 + 설정한 닉네임)
@@ -3553,9 +4185,26 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
           onOpenProfile={() => setShowProfile(true)}
           onOpenPassword={() => setShowPasswordModal(true)}
           onOpenGuide={() => setShowGuide(true)}
+          onOpenFeatures={() => setShowFeatures(true)}
           onClose={() => setShowMyPage(false)}
         />
       )}
+      {popupUser && (
+        <UserPopup
+          user={{
+            name: popupUser,
+            display: displayName(popupUser),
+            avatarUrl: userAvatar(popupUser),
+            color: userColor(popupUser),
+            online: isUserOnline(popupUser),
+            lastSeen: profileMap[popupUser]?.last_seen,
+            isAdmin: false,
+          }}
+          onMention={(name) => setInput((prev) => prev + `@${name} `)}
+          onClose={() => setPopupUser(null)}
+        />
+      )}
+      {showFeatures && <FeatureListModal onClose={() => setShowFeatures(false)} />}
       {showGuide && <GuideModal onClose={() => setShowGuide(false)} />}
       {showProfile && (
         <ProfileModal
@@ -3892,12 +4541,30 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                 <div style={{ display: "flex", gap: 12 }}>
                 <div style={{ width: 40, flexShrink: 0 }}>
                   {!isGrouped && (
-                    <Avatar
-                      url={userAvatar(m.author)}
-                      color={userColor(m.author)}
-                      label={displayName(m.author)}
-                      size={40}
-                    />
+                    <div
+                      onClick={() => setPopupUser(m.author)}
+                      style={{ position: "relative", cursor: "pointer", width: 40 }}
+                    >
+                      <Avatar
+                        url={userAvatar(m.author)}
+                        color={userColor(m.author)}
+                        label={displayName(m.author)}
+                        size={40}
+                      />
+                      <span
+                        style={{
+                          position: "absolute",
+                          right: -1,
+                          bottom: -1,
+                          width: 10,
+                          height: 10,
+                          borderRadius: "50%",
+                          background: isUserOnline(m.author) ? "#23a55a" : "#80848e",
+                          border: "3px solid #313338",
+                          boxSizing: "content-box",
+                        }}
+                      />
+                    </div>
                   )}
                   {isGrouped && isHovered && (
                     <div style={{ color: "#949ba4", fontSize: 10, textAlign: "center", marginTop: 4 }}>
@@ -3909,7 +4576,15 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                 <div style={{ minWidth: 0, flex: 1 }}>
                   {!isGrouped && (
                     <div>
-                      <span style={{ color: "#fff", fontWeight: 600, fontSize: 15 }}>
+                      <span
+                        onClick={() => setPopupUser(m.author)}
+                        style={{
+                          color: "#fff",
+                          fontWeight: 600,
+                          fontSize: 15,
+                          cursor: "pointer",
+                        }}
+                      >
                         {displayName(m.author)}
                       </span>
                       <span style={{ color: "#949ba4", fontSize: 12, marginLeft: 8 }}>
