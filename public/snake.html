@@ -245,6 +245,46 @@
     margin-top: 4px;
   }
 
+  .mode-badge {
+    display: inline-block;
+    padding: 6px 14px;
+    margin: 0 5px;
+    border: 1px solid #e74c3c;
+    color: #e74c3c;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 2px;
+  }
+  .rank-panel {
+    margin-top: 26px;
+    border: 1px solid #333;
+    padding: 16px 18px;
+    min-width: 320px;
+    text-align: left;
+  }
+  .rank-title {
+    font-size: 13px;
+    letter-spacing: 3px;
+    color: #888;
+    margin-bottom: 12px;
+    text-align: center;
+  }
+  .rank-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 0;
+    font-size: 14px;
+    border-bottom: 1px solid #222;
+  }
+  .rank-row:last-child { border-bottom: none; }
+  .rank-num { width: 26px; color: #666; font-variant-numeric: tabular-nums; }
+  .rank-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank-score { color: #2ecc40; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .rank-row.me .rank-name { color: #f1c40f; }
+  .rank-row.top1 .rank-num { color: #f1c40f; }
+  .rank-empty { color: #555; font-size: 13px; text-align: center; padding: 10px 0; }
+  .save-status { font-size: 12px; color: #777; margin-top: 8px; }
 
 </style>
 </head>
@@ -253,13 +293,7 @@
 <div class="wrap">
   <div class="menu" id="menu">
     <div class="controls">
-      <select id="modeSelect">
-        <option value="easy">Easy</option>
-        <option value="normal">Normal</option>
-        <option value="hard">Hard</option>
-        <option value="hardcore">Hardcore</option>
-        <option value="bomb">Bomb</option>
-      </select>
+      <div class="mode-badge">HARDCORE</div>
       <select id="skinSelect">
         <option value="green">Green</option>
         <option value="blue">Blue</option>
@@ -268,6 +302,10 @@
         <option value="rainbow">Rainbow</option>
       </select>
       <button id="playBtn">Play</button>
+    </div>
+    <div class="rank-panel">
+      <div class="rank-title">R A N K I N G</div>
+      <div id="rankList"><div class="rank-empty">불러오는 중...</div></div>
     </div>
   </div>
 
@@ -279,6 +317,7 @@
       <canvas id="board" width="1200" height="600"></canvas>
       <div class="overlay" id="overlay">
         <div id="finalScoreText">Score: 0</div>
+        <div class="save-status" id="saveStatus"></div>
         <div>
           <button id="retryBtn">Retry</button>
           <button id="menuBtn">Menu</button>
@@ -297,13 +336,111 @@
 <div class="best-text-pop" id="bestTextPop">NEW BEST!</div>
 
 <script>
-const MODES = {
-  easy:     { speed: 120, wrap: false, rampAmount: 0, cols: 20, rows: 10, event: false },
-  normal:   { speed: 120, wrap: false, rampAmount: 2, cols: 20, rows: 10, event: false },
-  hard:     { speed: 120, wrap: false, rampAmount: 5, cols: 20, rows: 10, event: false },
-  hardcore: { speed: 120, wrap: false, rampAmount: 9, cols: 20, rows: 10, event: false },
-  bomb:     { speed: 120, wrap: false, rampAmount: 2, cols: 20, rows: 10, event: true  },
+// ---------- 랭킹 (Supabase 연동) ----------
+const SUPABASE_URL = "https://afcybstphdspdrgkvkzv.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFmY3lic3RwaGRzcGRyZ2t2a3p2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ2ODkwMjAsImV4cCI6MjEwMDI2NTAyMH0.6WNnaXFopFhC_N2IgnQbY8MrCSITRop0am4MBg28qAc";
+const GAME_ID = "snake_hardcore";
+
+// 채팅 앱에서 ?player=이름 으로 전달받음
+const PLAYER =
+  new URLSearchParams(location.search).get("player") || "익명";
+
+const SB_HEAD = {
+  apikey: SUPABASE_ANON_KEY,
+  Authorization: "Bearer " + SUPABASE_ANON_KEY,
+  "Content-Type": "application/json",
 };
+
+async function loadRanking() {
+  const el = document.getElementById("rankList");
+  try {
+    const res = await fetch(
+      SUPABASE_URL +
+        "/rest/v1/game_scores?apikey=" + SUPABASE_ANON_KEY +
+        "&game=eq." + GAME_ID +
+        "&select=player,score&order=score.desc&limit=100",
+      { headers: SB_HEAD }
+    );
+    if (!res.ok) throw new Error(res.status);
+    const rows = await res.json();
+
+    // 플레이어별 최고 점수만 남김
+    const bestByPlayer = {};
+    rows.forEach((r) => {
+      if (!bestByPlayer[r.player] || r.score > bestByPlayer[r.player]) {
+        bestByPlayer[r.player] = r.score;
+      }
+    });
+    const ranked = Object.entries(bestByPlayer)
+      .map(([player, score]) => ({ player, score }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10);
+
+    if (ranked.length === 0) {
+      el.innerHTML = '<div class="rank-empty">아직 기록이 없습니다</div>';
+      return;
+    }
+    el.innerHTML = ranked
+      .map((r, i) => {
+        const cls =
+          "rank-row" + (r.player === PLAYER ? " me" : "") + (i === 0 ? " top1" : "");
+        const medal = i === 0 ? "1" : i === 1 ? "2" : i === 2 ? "3" : String(i + 1);
+        return (
+          '<div class="' + cls + '">' +
+          '<span class="rank-num">' + medal + '</span>' +
+          '<span class="rank-name">' + escapeText(r.player) + "</span>" +
+          '<span class="rank-score">' + r.score + "</span>" +
+          "</div>"
+        );
+      })
+      .join("");
+  } catch (e) {
+    el.innerHTML = '<div class="rank-empty">랭킹을 불러오지 못했습니다</div>';
+  }
+}
+
+function escapeText(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function submitScore(score, maxSpeedMultiplier) {
+  const statusEl = document.getElementById("saveStatus");
+  if (score <= 0) {
+    if (statusEl) statusEl.textContent = "";
+    return;
+  }
+  if (statusEl) statusEl.textContent = "기록 저장 중...";
+  try {
+    const res = await fetch(
+      SUPABASE_URL + "/rest/v1/game_scores?apikey=" + SUPABASE_ANON_KEY,
+      {
+        method: "POST",
+        headers: SB_HEAD,
+        body: JSON.stringify({
+          game: GAME_ID,
+          player: PLAYER,
+          score: score,
+          max_speed: maxSpeedMultiplier,
+        }),
+      }
+    );
+    if (!res.ok) throw new Error(res.status);
+    if (statusEl) statusEl.textContent = "기록 저장 완료 (" + PLAYER + ")";
+    loadRanking();
+  } catch (e) {
+    if (statusEl) statusEl.textContent = "기록 저장 실패";
+  }
+}
+
+loadRanking();
+</script>
+
+<script>
+const MODES = {
+  hardcore: { speed: 120, wrap: false, rampAmount: 4, cols: 20, rows: 10, event: false },
+};
+// 속도 하한선을 크게 낮춰서 계속 빨라지도록 (기존 50ms = 2.4배에서 막혔음)
+const MIN_SPEED = 14;
 
 const SKINS = {
   green:   { body: '#2ecc40' },
@@ -313,15 +450,14 @@ const SKINS = {
   rainbow: { body: 'rainbow' },
 };
 
-const modeSelect = document.getElementById('modeSelect');
 const skinSelect = document.getElementById('skinSelect');
-let selectedMode = MODES.easy;
-let selectedModeId = 'easy';
+let selectedMode = MODES.hardcore;
+let selectedModeId = 'hardcore';
 let selectedSkin = SKINS.green;
 
 document.getElementById('playBtn').addEventListener('click', () => {
-  selectedModeId = modeSelect.value;
-  selectedMode = MODES[selectedModeId];
+  selectedModeId = 'hardcore';
+  selectedMode = MODES.hardcore;
   selectedSkin = SKINS[skinSelect.value];
   document.getElementById('menu').classList.remove('active');
   document.getElementById('menu').style.display = 'none';
@@ -428,7 +564,7 @@ function updateTopbar() {
 }
 
 function updateSpeedTag() {
-  const multiplier = (BASE_SPEED / speed).toFixed(1);
+  const multiplier = (BASE_SPEED / speed).toFixed(2);
   document.getElementById('speedTag').textContent = 'SPEED: x' + multiplier;
 }
 
@@ -495,8 +631,10 @@ function tick() {
     if (score % 67 === 0) triggerLucky67();
     // 다음 사과 등장 (Bomb 모드면 폭탄 타이머가 알아서 다음 전환을 관리하므로 그냥 사과로 스폰)
     item = spawnItem('apple');
-    if (selectedMode.rampAmount > 0 && speed > 50) {
-      speed = Math.max(50, speed - selectedMode.rampAmount);
+    if (selectedMode.rampAmount > 0 && speed > MIN_SPEED) {
+      // 빨라질수록 감속 폭을 줄여서, 끝없이 조금씩 계속 빨라지게 함
+      const step = Math.max(0.5, speed / 30);
+      speed = Math.max(MIN_SPEED, speed - step);
       updateSpeedTag();
       stopLoop();
       loopId = setInterval(tick, speed);
@@ -519,8 +657,11 @@ function endGame() {
     if (score > 0) triggerNewBest();
   }
   const survivedSec = ((performance.now() - startTime) / 1000).toFixed(1);
-  document.getElementById('finalScoreText').innerHTML = `Score: ${score} (Best: ${best})<br>Survived: ${survivedSec}s`;
+  const maxMult = (BASE_SPEED / speed).toFixed(2);
+  document.getElementById('finalScoreText').innerHTML =
+    `Score: ${score} (Best: ${best})<br>Survived: ${survivedSec}s &nbsp;·&nbsp; Max Speed: x${maxMult}`;
   document.getElementById('overlay').classList.add('show');
+  submitScore(score, Number(maxMult));
 }
 
 function hideOverlay() {
