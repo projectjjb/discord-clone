@@ -111,6 +111,47 @@ function subscribeToProfiles(onChange) {
   };
 }
 
+function subscribeToDocuments(onChange) {
+  const wsUrl =
+    SUPABASE_URL.replace("https://", "wss://") +
+    `/realtime/v1/websocket?apikey=${SUPABASE_ANON_KEY}&vsn=1.0.0`;
+  const ws = new WebSocket(wsUrl);
+  let ref = 1;
+
+  ws.onopen = () => {
+    ws.send(
+      JSON.stringify({
+        topic: "realtime:public:documents",
+        event: "phx_join",
+        payload: {},
+        ref: ref++,
+      })
+    );
+    const heartbeat = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ topic: "phoenix", event: "heartbeat", payload: {}, ref: ref++ }));
+      }
+    }, 25000);
+    ws._heartbeat = heartbeat;
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if ((msg.event === "UPDATE" || msg.event === "INSERT") && msg.payload?.record) {
+        onChange(msg.payload.record);
+      }
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  return () => {
+    clearInterval(ws._heartbeat);
+    ws.close();
+  };
+}
+
 function subscribeToMessages(onInsert, onUpdate, onDelete) {
   const wsUrl =
     SUPABASE_URL.replace("https://", "wss://") +
@@ -394,6 +435,41 @@ function avatarColor(seed) {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % colors.length;
   return colors[h];
+}
+
+// 아바타: 사진이 있으면 사진, 없으면 색상+이니셜
+function Avatar({ url, color, label, size = 40 }) {
+  const common = {
+    width: size,
+    height: size,
+    borderRadius: "50%",
+    flexShrink: 0,
+  };
+  if (url) {
+    return (
+      <img
+        src={url}
+        alt="프로필"
+        style={{ ...common, objectFit: "cover", display: "block" }}
+      />
+    );
+  }
+  return (
+    <div
+      style={{
+        ...common,
+        background: color,
+        color: "#fff",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontWeight: 700,
+        fontSize: size * 0.35,
+      }}
+    >
+      {initials(label)}
+    </div>
+  );
 }
 
 // ---------- 가짜 404 화면 ----------
@@ -695,16 +771,42 @@ const AVATAR_COLORS = [
   "#9B59B6", "#3BA55D", "#E67E22", "#1ABC9C", "#95A5A6",
 ];
 
-function ProfileModal({ currentUser, nickname, currentColor, onSave, onClose }) {
+function ProfileModal({ currentUser, nickname, currentColor, currentAvatarUrl, onSave, onClose }) {
   const [value, setValue] = useState(nickname || "");
   const [color, setColor] = useState(currentColor || avatarColor(currentUser));
+  const [avatarUrl, setAvatarUrl] = useState(currentAvatarUrl || null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [uploadErr, setUploadErr] = useState("");
+  const avatarInputRef = useRef(null);
+
+  async function handleAvatarSelect(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const err = validateImageFile(file);
+    if (err) {
+      setUploadErr(err);
+      return;
+    }
+    setUploadErr("");
+    setUploadingAvatar(true);
+    try {
+      const compressed = await compressImage(file);
+      const url = await uploadImage(compressed);
+      setAvatarUrl(url);
+    } catch (e2) {
+      setUploadErr(`사진 업로드 실패: ${e2.message}`);
+    } finally {
+      setUploadingAvatar(false);
+    }
+  }
 
   async function handleSave() {
     setSaving(true);
     setSaved(false);
-    const ok = await onSave(value, color);
+    const ok = await onSave(value, color, avatarUrl);
     setSaving(false);
     if (ok) {
       setSaved(true);
@@ -733,26 +835,12 @@ function ProfileModal({ currentUser, nickname, currentColor, onSave, onClose }) 
           maxWidth: "90vw",
           padding: "28px 26px",
           boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
+          maxHeight: "88vh",
+          overflowY: "auto",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-          <div
-            style={{
-              width: 56,
-              height: 56,
-              borderRadius: "50%",
-              background: color,
-              color: "#fff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontWeight: 700,
-              fontSize: 20,
-              flexShrink: 0,
-            }}
-          >
-            {initials(value || currentUser)}
-          </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+          <Avatar url={avatarUrl} color={color} label={value || currentUser} size={56} />
           <div>
             <div style={{ color: "#fff", fontSize: 18, fontWeight: 700 }}>
               {value || currentUser}
@@ -760,6 +848,53 @@ function ProfileModal({ currentUser, nickname, currentColor, onSave, onClose }) 
             <div style={{ color: "#949ba4", fontSize: 13 }}>@{currentUser}</div>
           </div>
         </div>
+
+        <input
+          ref={avatarInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          onChange={handleAvatarSelect}
+          style={{ display: "none" }}
+        />
+        <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+          <button
+            onClick={() => avatarInputRef.current?.click()}
+            disabled={uploadingAvatar}
+            style={{
+              flex: 1,
+              padding: "9px 0",
+              borderRadius: 4,
+              border: "none",
+              background: "#4e5058",
+              color: "#fff",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: uploadingAvatar ? "default" : "pointer",
+            }}
+          >
+            {uploadingAvatar ? "업로드 중..." : "📷 사진 올리기"}
+          </button>
+          {avatarUrl && (
+            <button
+              onClick={() => setAvatarUrl(null)}
+              style={{
+                padding: "9px 14px",
+                borderRadius: 4,
+                border: "none",
+                background: "#4a2326",
+                color: "#ed4245",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              사진 제거
+            </button>
+          )}
+        </div>
+        {uploadErr && (
+          <div style={{ color: "#ed4245", fontSize: 12, marginBottom: 12 }}>{uploadErr}</div>
+        )}
 
         <label style={{ color: "#b5bac1", fontSize: 12, fontWeight: 700, textTransform: "uppercase" }}>
           닉네임
@@ -797,7 +932,7 @@ function ProfileModal({ currentUser, nickname, currentColor, onSave, onClose }) 
             marginTop: 18,
           }}
         >
-          프로필 색상
+          프로필 색상 {avatarUrl && <span style={{ color: "#6d6f78", fontWeight: 400, textTransform: "none" }}>(사진 없을 때만 표시)</span>}
         </label>
         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
           {AVATAR_COLORS.map((c) => (
@@ -1336,6 +1471,82 @@ function markSpoilerOpened(key) {
   }
 }
 
+// 스포일러 이미지 (흐리게 가려졌다가 클릭하면 열림)
+function SpoilerImage({ src, spoilerKey, onOpen }) {
+  const [revealed, setRevealed] = useState(() => Boolean(getOpenedSpoilers()[spoilerKey]));
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        marginTop: 6,
+        width: "100%",
+        maxWidth: 480,
+        minWidth: 220,
+        display: "inline-block",
+      }}
+    >
+      <img
+        src={src}
+        alt="첨부 이미지"
+        onClick={() => {
+          if (revealed) {
+            window.open(src, "_blank");
+          } else {
+            markSpoilerOpened(spoilerKey);
+            setRevealed(true);
+          }
+        }}
+        onLoad={onOpen}
+        style={{
+          width: "100%",
+          maxWidth: 480,
+          minWidth: 220,
+          maxHeight: 480,
+          borderRadius: 8,
+          display: "block",
+          cursor: "pointer",
+          objectFit: "contain",
+          background: "#1e1f22",
+          filter: revealed ? "none" : "blur(28px)",
+          transition: "filter 0.2s",
+        }}
+      />
+      {!revealed && (
+        <div
+          onClick={() => {
+            markSpoilerOpened(spoilerKey);
+            setRevealed(true);
+          }}
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            background: "#0a0a0a",
+            borderRadius: 8,
+          }}
+        >
+          <div
+            style={{
+              background: "rgba(255,255,255,0.12)",
+              color: "#fff",
+              fontSize: 13,
+              fontWeight: 600,
+              padding: "6px 14px",
+              borderRadius: 20,
+            }}
+          >
+            🙈 스포일러 · 눌러서 보기
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // 개별 스포일러 조각
 function SpoilerText({ spoilerKey, children }) {
   const [revealed, setRevealed] = useState(() => Boolean(getOpenedSpoilers()[spoilerKey]));
@@ -1367,11 +1578,11 @@ function SpoilerText({ spoilerKey, children }) {
   );
 }
 
-// 메시지 본문을 렌더링 (||스포일러|| 문법 처리)
+// 메시지 본문을 렌더링 (`스포일러` 문법 처리)
 function MessageBody({ text, messageId }) {
-  // ||...|| 를 스포일러로 분리
+  // `...` 를 스포일러로 분리
   const parts = [];
-  const regex = /\|\|([\s\S]+?)\|\|/g;
+  const regex = /`([^`]+?)`/g;
   let lastIndex = 0;
   let match;
   let spoilerIdx = 0;
@@ -1401,12 +1612,461 @@ function MessageBody({ text, messageId }) {
   );
 }
 
+// ---------- 간단한 마크다운 렌더러 ----------
+function escapeHtml(s) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// 한 줄 안의 인라인 서식 (굵게/기울임/코드/링크)
+function renderInline(text) {
+  let t = escapeHtml(text);
+  // 인라인 코드 `code`
+  t = t.replace(/`([^`]+)`/g, '<code style="background:#1e1f22;padding:1px 5px;border-radius:3px;font-family:monospace;font-size:0.9em">$1</code>');
+  // 굵게 **bold**
+  t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // 기울임 *italic*
+  t = t.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  // 취소선 ~~text~~
+  t = t.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  // 링크 [text](url)
+  t = t.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    '<a href="$2" target="_blank" style="color:#00a8fc">$1</a>'
+  );
+  return t;
+}
+
+// 마크다운 전체를 HTML 문자열로 변환
+function markdownToHtml(md) {
+  const lines = (md || "").split("\n");
+  const html = [];
+  let inList = false;
+  let inCode = false;
+  let codeBuffer = [];
+
+  function closeList() {
+    if (inList) {
+      html.push("</ul>");
+      inList = false;
+    }
+  }
+
+  for (const line of lines) {
+    // 코드 블록 ```
+    if (line.trim().startsWith("```")) {
+      if (inCode) {
+        html.push(
+          `<pre style="background:#1e1f22;padding:12px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px">${escapeHtml(
+            codeBuffer.join("\n")
+          )}</pre>`
+        );
+        codeBuffer = [];
+        inCode = false;
+      } else {
+        closeList();
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) {
+      codeBuffer.push(line);
+      continue;
+    }
+
+    // 제목
+    const h = line.match(/^(#{1,3})\s+(.*)$/);
+    if (h) {
+      closeList();
+      const level = h[1].length;
+      const sizes = { 1: "1.6em", 2: "1.3em", 3: "1.1em" };
+      html.push(
+        `<div style="font-size:${sizes[level]};font-weight:700;margin:14px 0 6px;color:#fff">${renderInline(
+          h[2]
+        )}</div>`
+      );
+      continue;
+    }
+
+    // 리스트
+    const li = line.match(/^\s*[-*]\s+(.*)$/);
+    if (li) {
+      if (!inList) {
+        html.push('<ul style="margin:4px 0;padding-left:22px">');
+        inList = true;
+      }
+      html.push(`<li style="margin:2px 0">${renderInline(li[1])}</li>`);
+      continue;
+    }
+
+    closeList();
+
+    // 인용
+    const quote = line.match(/^>\s+(.*)$/);
+    if (quote) {
+      html.push(
+        `<blockquote style="border-left:3px solid #4e5058;margin:6px 0;padding:2px 12px;color:#b5bac1">${renderInline(
+          quote[1]
+        )}</blockquote>`
+      );
+      continue;
+    }
+
+    // 구분선
+    if (line.trim() === "---") {
+      html.push('<hr style="border:none;border-top:1px solid #3f4147;margin:12px 0" />');
+      continue;
+    }
+
+    // 빈 줄
+    if (line.trim() === "") {
+      html.push('<div style="height:8px"></div>');
+      continue;
+    }
+
+    // 일반 문단
+    html.push(`<div style="margin:2px 0;line-height:1.6">${renderInline(line)}</div>`);
+  }
+
+  closeList();
+  return html.join("");
+}
+
+function MarkdownView({ content }) {
+  return (
+    <div
+      style={{ color: "#dbdee1", fontSize: 15 }}
+      dangerouslySetInnerHTML={{ __html: markdownToHtml(content) }}
+    />
+  );
+}
+
 function formatTime(iso) {
   try {
     return new Date(iso).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" });
   } catch {
     return "";
   }
+}
+
+// ---------- 공유 문서 뷰 ----------
+function DocsView({ currentUser, serverName }) {
+  const [docs, setDocs] = useState([]);
+  const [activeDocId, setActiveDocId] = useState(null);
+  const [content, setContent] = useState("");
+  const [title, setTitle] = useState("");
+  const [mode, setMode] = useState("edit"); // edit | preview
+  const [loading, setLoading] = useState(true);
+  const [savedAt, setSavedAt] = useState("");
+  const [err, setErr] = useState("");
+
+  const saveTimer = useRef(null);
+  const isLocalEdit = useRef(false); // 내가 방금 편집한 건지 (실시간 반영 시 덮어쓰기 방지)
+
+  // 문서 목록 로드
+  function loadDocs(selectFirst = false) {
+    sbSelect("documents", "select=id,title,updated_at&order=updated_at.desc")
+      .then((rows) => {
+        setDocs(rows);
+        if (selectFirst && rows.length > 0 && activeDocId == null) {
+          setActiveDocId(rows[0].id);
+        }
+      })
+      .catch(() => setErr("문서 목록을 불러오지 못했습니다."))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    loadDocs(true);
+  }, []);
+
+  // 선택한 문서 내용 로드
+  useEffect(() => {
+    if (activeDocId == null) return;
+    sbSelect("documents", `id=eq.${activeDocId}&select=id,title,content`)
+      .then((rows) => {
+        if (rows.length > 0) {
+          setTitle(rows[0].title);
+          setContent(rows[0].content);
+        }
+      })
+      .catch(() => {});
+  }, [activeDocId]);
+
+  // 실시간 구독: 다른 사람이 편집하면 반영
+  useEffect(() => {
+    const unsubscribe = subscribeToDocuments((record) => {
+      // 목록 갱신
+      loadDocs();
+      // 지금 보고 있는 문서면 내용도 갱신 (단, 내가 방금 친 건 제외)
+      if (record.id === activeDocId && !isLocalEdit.current) {
+        setContent(record.content);
+        setTitle(record.title);
+      }
+    });
+    return unsubscribe;
+  }, [activeDocId]);
+
+  // 내용 바뀌면 디바운스 저장 (0.8초 멈추면 저장)
+  function handleContentChange(newContent) {
+    setContent(newContent);
+    isLocalEdit.current = true;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => saveDoc(newContent, title), 800);
+  }
+
+  function handleTitleChange(newTitle) {
+    setTitle(newTitle);
+    isLocalEdit.current = true;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => saveDoc(content, newTitle), 800);
+  }
+
+  async function saveDoc(c, t) {
+    if (activeDocId == null) return;
+    try {
+      await sbUpdate("documents", `id=eq.${activeDocId}`, {
+        content: c,
+        title: t || "제목 없는 문서",
+        updated_at: new Date().toISOString(),
+        updated_by: currentUser,
+      });
+      setSavedAt(new Date().toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" }));
+      setDocs((prev) =>
+        prev.map((d) => (d.id === activeDocId ? { ...d, title: t || "제목 없는 문서" } : d))
+      );
+      // 저장 후 잠깐 뒤 로컬 편집 플래그 해제 (실시간 반영 재개)
+      setTimeout(() => {
+        isLocalEdit.current = false;
+      }, 500);
+    } catch (e) {
+      setErr(`저장 실패: ${e.message}`);
+    }
+  }
+
+  async function createDoc() {
+    try {
+      const [saved] = await sbInsert("documents", { title: "제목 없는 문서", content: "" });
+      setDocs((prev) => [saved, ...prev]);
+      setActiveDocId(saved.id);
+      setTitle(saved.title);
+      setContent("");
+    } catch (e) {
+      setErr(`문서 생성 실패: ${e.message}`);
+    }
+  }
+
+  async function deleteDoc(id) {
+    if (!window.confirm("이 문서를 삭제할까요? 모두에게서 사라집니다.")) return;
+    try {
+      await sbDelete("documents", `id=eq.${id}`);
+      setDocs((prev) => prev.filter((d) => d.id !== id));
+      if (activeDocId === id) {
+        setActiveDocId(null);
+        setContent("");
+        setTitle("");
+      }
+    } catch (e) {
+      setErr(`삭제 실패: ${e.message}`);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", flex: 1, minWidth: 0 }}>
+      {/* 문서 목록 */}
+      <div
+        style={{
+          width: 240,
+          background: "#2b2d31",
+          display: "flex",
+          flexDirection: "column",
+          flexShrink: 0,
+        }}
+      >
+        <div
+          style={{
+            height: 48,
+            display: "flex",
+            alignItems: "center",
+            padding: "0 16px",
+            borderBottom: "1px solid #1e1f22",
+            color: "#fff",
+            fontWeight: 700,
+            fontSize: 15,
+          }}
+        >
+          {serverName}
+        </div>
+        <div style={{ padding: 8 }}>
+          <button
+            onClick={createDoc}
+            style={{
+              width: "100%",
+              padding: "9px 0",
+              borderRadius: 4,
+              border: "none",
+              background: "#248046",
+              color: "#fff",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            + 새 문서
+          </button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "0 8px" }}>
+          {loading && <div style={{ color: "#6d6f78", fontSize: 13, padding: 8 }}>불러오는 중...</div>}
+          {docs.map((d) => (
+            <div
+              key={d.id}
+              onClick={() => setActiveDocId(d.id)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "8px 10px",
+                borderRadius: 4,
+                marginBottom: 2,
+                cursor: "pointer",
+                background: activeDocId === d.id ? "#3f4248" : "transparent",
+                color: activeDocId === d.id ? "#fff" : "#949ba4",
+                fontSize: 14,
+              }}
+            >
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                📄 {d.title}
+              </span>
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteDoc(d.id);
+                }}
+                title="삭제"
+                style={{ color: "#ed4245", fontSize: 12, marginLeft: 6, flexShrink: 0 }}
+              >
+                ✕
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 문서 편집 영역 */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: "#313338" }}>
+        {activeDocId == null ? (
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#6d6f78",
+              fontSize: 15,
+            }}
+          >
+            왼쪽에서 문서를 선택하거나 새로 만드세요.
+          </div>
+        ) : (
+          <>
+            {/* 상단 바 */}
+            <div
+              style={{
+                height: 48,
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "0 16px",
+                borderBottom: "1px solid #26272b",
+                flexShrink: 0,
+              }}
+            >
+              <input
+                value={title}
+                onChange={(e) => handleTitleChange(e.target.value)}
+                placeholder="문서 제목"
+                style={{
+                  flex: 1,
+                  background: "transparent",
+                  border: "none",
+                  outline: "none",
+                  color: "#fff",
+                  fontSize: 16,
+                  fontWeight: 700,
+                }}
+              />
+              {savedAt && (
+                <span style={{ color: "#6d6f78", fontSize: 12 }}>저장됨 {savedAt}</span>
+              )}
+              <div style={{ display: "flex", background: "#1e1f22", borderRadius: 6, padding: 3 }}>
+                <button
+                  onClick={() => setMode("edit")}
+                  style={{
+                    padding: "5px 12px",
+                    border: "none",
+                    borderRadius: 4,
+                    background: mode === "edit" ? "#404249" : "transparent",
+                    color: mode === "edit" ? "#fff" : "#949ba4",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  편집
+                </button>
+                <button
+                  onClick={() => setMode("preview")}
+                  style={{
+                    padding: "5px 12px",
+                    border: "none",
+                    borderRadius: 4,
+                    background: mode === "preview" ? "#404249" : "transparent",
+                    color: mode === "preview" ? "#fff" : "#949ba4",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  미리보기
+                </button>
+              </div>
+            </div>
+
+            {/* 편집 / 미리보기 */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "20px 28px" }}>
+              {mode === "edit" ? (
+                <textarea
+                  value={content}
+                  onChange={(e) => handleContentChange(e.target.value)}
+                  placeholder="여기에 작성하세요. 마크다운을 지원합니다.&#10;&#10;# 제목&#10;**굵게**  *기울임*  ~~취소선~~&#10;- 목록&#10;> 인용&#10;```코드```"
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    minHeight: 400,
+                    background: "transparent",
+                    border: "none",
+                    outline: "none",
+                    color: "#dbdee1",
+                    fontSize: 15,
+                    lineHeight: 1.6,
+                    resize: "none",
+                    fontFamily: "inherit",
+                  }}
+                />
+              ) : (
+                <MarkdownView content={content} />
+              )}
+            </div>
+          </>
+        )}
+        {err && (
+          <div style={{ color: "#ed4245", fontSize: 12, padding: "8px 16px" }}>{err}</div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ---------- 메인 디스코드 스타일 채팅 ----------
@@ -1416,6 +2076,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const [showAdmin, setShowAdmin] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [currentView, setCurrentView] = useState("chat"); // "chat" | "docs"
   const [profileMap, setProfileMap] = useState({}); // { 원래이름: { nickname, avatar_color } }
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
@@ -1426,32 +2087,43 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const [editingServerName, setEditingServerName] = useState(false);
   const [serverNameDraft, setServerNameDraft] = useState("");
   const [myColor, setMyColor] = useState(null);
+  const [myAvatarUrl, setMyAvatarUrl] = useState(null);
 
-  // 전체 사용자 프로필(닉네임/색상) 로드 — 다른 사람이 바꾼 것도 반영되도록 주기적으로 갱신
+  // 전체 사용자 프로필(닉네임/색상/사진) 로드 — 다른 사람이 바꾼 것도 반영되도록 주기적으로 갱신
   function refreshProfiles() {
-    sbSelect("whitelist", "select=name,nickname,avatar_color")
+    sbSelect("whitelist", "select=name,nickname,avatar_color,avatar_url")
       .then((rows) => {
         const map = {};
         rows.forEach((r) => {
-          map[r.name] = { nickname: r.nickname, avatar_color: r.avatar_color };
+          map[r.name] = {
+            nickname: r.nickname,
+            avatar_color: r.avatar_color,
+            avatar_url: r.avatar_url,
+          };
         });
         setProfileMap(map);
         const mine = rows.find((r) => r.name === currentUser);
         if (mine?.avatar_color) setMyColor(mine.avatar_color);
+        if (mine) setMyAvatarUrl(mine.avatar_url || null);
       })
       .catch(() => {});
   }
 
   useEffect(() => {
     refreshProfiles();
-    // 실시간 구독: 누군가 닉네임/색상을 바꾸면 즉시 반영
+    // 실시간 구독: 누군가 프로필을 바꾸면 즉시 반영
     const unsubscribe = subscribeToProfiles((record) => {
       setProfileMap((prev) => ({
         ...prev,
-        [record.name]: { nickname: record.nickname, avatar_color: record.avatar_color },
+        [record.name]: {
+          nickname: record.nickname,
+          avatar_color: record.avatar_color,
+          avatar_url: record.avatar_url,
+        },
       }));
-      if (record.name === currentUser && record.avatar_color) {
-        setMyColor(record.avatar_color);
+      if (record.name === currentUser) {
+        if (record.avatar_color) setMyColor(record.avatar_color);
+        setMyAvatarUrl(record.avatar_url || null);
       }
     });
     // 실시간 연결이 끊겼을 때를 대비한 백업 폴링
@@ -1470,7 +2142,12 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     return profileMap[originalName]?.avatar_color || avatarColor(originalName);
   }
 
+  function userAvatar(originalName) {
+    return profileMap[originalName]?.avatar_url || null;
+  }
+
   const [pendingImage, setPendingImage] = useState(null); // { file, previewUrl }
+  const [pendingImageSpoiler, setPendingImageSpoiler] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [openPickerFor, setOpenPickerFor] = useState(null); // 이모지 피커가 열린 메시지 id
   const [hoveredMsg, setHoveredMsg] = useState(null);
@@ -1557,7 +2234,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     let cancelled = false;
     sbSelect(
       "messages",
-      `channel_id=eq.${activeChannel}&select=id,author,text,image_url,reactions,created_at&order=created_at.asc`
+      `channel_id=eq.${activeChannel}&select=id,author,text,image_url,image_spoiler,reactions,created_at&order=created_at.asc`
     )
       .then((rows) => {
         if (!cancelled) setMessages(rows);
@@ -1644,8 +2321,10 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
 
     let imageUrl = null;
     const imageToSend = pendingImage;
+    const imageSpoiler = pendingImageSpoiler;
     setInput("");
     setPendingImage(null);
+    setPendingImageSpoiler(false);
 
     // 낙관적 업데이트: 내 화면엔 바로 표시 (이미지는 로컬 미리보기 사용)
     const tempId = `temp-${Date.now()}`;
@@ -1654,6 +2333,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
       author: currentUser,
       text,
       image_url: imageToSend?.previewUrl || null,
+      image_spoiler: imageSpoiler,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, optimistic]);
@@ -1669,6 +2349,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
         author: currentUser,
         text: text || "",
         image_url: imageUrl,
+        image_spoiler: imageSpoiler,
       });
       setMessages((prev) => prev.map((m) => (m.id === tempId ? saved : m)));
       if (imageUrl) {
@@ -1731,18 +2412,24 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     }
   }
 
-  async function saveProfile(newNickname, newColor) {
+  async function saveProfile(newNickname, newColor, newAvatarUrl) {
     const trimmed = newNickname.trim();
     try {
       await sbUpdate("whitelist", `code=eq.${encodeURIComponent(currentCode)}`, {
         nickname: trimmed || null,
         avatar_color: newColor || null,
+        avatar_url: newAvatarUrl || null,
       });
       onNicknameChange(trimmed);
       setMyColor(newColor || null);
+      setMyAvatarUrl(newAvatarUrl || null);
       setProfileMap((prev) => ({
         ...prev,
-        [currentUser]: { nickname: trimmed || null, avatar_color: newColor || null },
+        [currentUser]: {
+          nickname: trimmed || null,
+          avatar_color: newColor || null,
+          avatar_url: newAvatarUrl || null,
+        },
       }));
       return true;
     } catch (e) {
@@ -1778,12 +2465,13 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
         }}
       >
         <div
+          onClick={() => setCurrentView("chat")}
           title={serverName}
           style={{
             width: 48,
             height: 48,
-            borderRadius: 16,
-            background: "#5865F2",
+            borderRadius: currentView === "chat" ? 16 : 24,
+            background: currentView === "chat" ? "#5865F2" : "#313338",
             color: "#fff",
             display: "flex",
             alignItems: "center",
@@ -1796,8 +2484,32 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
         >
           {serverName?.trim()?.[0] || "?"}
         </div>
+
+        <div
+          onClick={() => setCurrentView("docs")}
+          title="공유 문서"
+          style={{
+            width: 48,
+            height: 48,
+            borderRadius: currentView === "docs" ? 16 : 24,
+            background: currentView === "docs" ? "#248046" : "#313338",
+            color: "#fff",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 22,
+            cursor: "pointer",
+            transition: "border-radius 0.15s, background 0.15s",
+          }}
+        >
+          📄
+        </div>
       </div>
 
+      {currentView === "docs" ? (
+        <DocsView currentUser={currentUser} serverName="공유 문서" />
+      ) : (
+      <>
       {/* 채널 목록 */}
       <div
         style={{
@@ -1947,23 +2659,12 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
             cursor: "pointer",
           }}
         >
-          <div
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: "50%",
-              background: userColor(currentUser),
-              color: "#fff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontWeight: 700,
-              fontSize: 13,
-              flexShrink: 0,
-            }}
-          >
-            {initials(displayName(currentUser))}
-          </div>
+          <Avatar
+            url={myAvatarUrl}
+            color={userColor(currentUser)}
+            label={displayName(currentUser)}
+            size={32}
+          />
           <div style={{ minWidth: 0 }}>
             <div style={{ color: "#fff", fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {displayName(currentUser)}
@@ -1980,6 +2681,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
           currentUser={currentUser}
           nickname={nickname}
           currentColor={myColor || avatarColor(currentUser)}
+          currentAvatarUrl={myAvatarUrl}
           onSave={saveProfile}
           onClose={() => setShowProfile(false)}
         />
@@ -2059,22 +2761,12 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
               >
                 <div style={{ width: 40, flexShrink: 0 }}>
                   {!isGrouped && (
-                    <div
-                      style={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: "50%",
-                        background: userColor(m.author),
-                        color: "#fff",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontWeight: 700,
-                        fontSize: 14,
-                      }}
-                    >
-                      {initials(displayName(m.author))}
-                    </div>
+                    <Avatar
+                      url={userAvatar(m.author)}
+                      color={userColor(m.author)}
+                      label={displayName(m.author)}
+                      size={40}
+                    />
                   )}
                   {isGrouped && isHovered && (
                     <div style={{ color: "#949ba4", fontSize: 10, textAlign: "center", marginTop: 4 }}>
@@ -2099,30 +2791,41 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                       <MessageBody text={m.text} messageId={m.id} />
                     </div>
                   )}
-                  {m.image_url && (
-                    <img
-                      src={m.image_url}
-                      alt="첨부 이미지"
-                      onClick={() => window.open(m.image_url, "_blank")}
-                      onLoad={() => {
-                        if (idx === messages.length - 1 && isNearBottomRef.current) {
-                          scrollToBottom(false);
-                        }
-                      }}
-                      style={{
-                        marginTop: 6,
-                        width: "100%",
-                        maxWidth: 480,
-                        minWidth: 220,
-                        maxHeight: 480,
-                        borderRadius: 8,
-                        display: "block",
-                        cursor: "pointer",
-                        objectFit: "contain",
-                        background: "#1e1f22",
-                      }}
-                    />
-                  )}
+                  {m.image_url &&
+                    (m.image_spoiler ? (
+                      <SpoilerImage
+                        src={m.image_url}
+                        spoilerKey={`img-${m.id}`}
+                        onOpen={() => {
+                          if (idx === messages.length - 1 && isNearBottomRef.current) {
+                            scrollToBottom(false);
+                          }
+                        }}
+                      />
+                    ) : (
+                      <img
+                        src={m.image_url}
+                        alt="첨부 이미지"
+                        onClick={() => window.open(m.image_url, "_blank")}
+                        onLoad={() => {
+                          if (idx === messages.length - 1 && isNearBottomRef.current) {
+                            scrollToBottom(false);
+                          }
+                        }}
+                        style={{
+                          marginTop: 6,
+                          width: "100%",
+                          maxWidth: 480,
+                          minWidth: 220,
+                          maxHeight: 480,
+                          borderRadius: 8,
+                          display: "block",
+                          cursor: "pointer",
+                          objectFit: "contain",
+                          background: "#1e1f22",
+                        }}
+                      />
+                    ))}
 
                   {reactionList.length > 0 && (
                     <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
@@ -2238,6 +2941,21 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                 {pendingImage.file.name}
               </div>
               <button
+                onClick={() => setPendingImageSpoiler((v) => !v)}
+                title="스포일러로 보내기"
+                style={{
+                  background: pendingImageSpoiler ? "#5865F2" : "#3f4147",
+                  border: "none",
+                  color: "#fff",
+                  borderRadius: 4,
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {pendingImageSpoiler ? "🙈 스포일러 ✓" : "🙈 스포일러"}
+              </button>
+              <button
                 onClick={cancelPendingImage}
                 style={{
                   background: "#3f4147",
@@ -2305,9 +3023,9 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
             />
             <button
               onClick={() => {
-                setInput((prev) => prev + "||내용||");
+                setInput((prev) => prev + "`내용`");
               }}
-              title="스포일러 (||내용||)"
+              title="스포일러 (`내용`)"
               style={{
                 background: "transparent",
                 border: "none",
@@ -2370,6 +3088,8 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
 
       {showAdmin && (
         <AdminPanel currentCode={currentCode} onClose={() => setShowAdmin(false)} />
+      )}
+      </>
       )}
     </div>
   );
