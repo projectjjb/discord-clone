@@ -373,7 +373,7 @@
     <span class="cheat-btn" id="cheatGrow">추가</span>
   </div>
   <div class="cheat-hint">
-    F2: 패널 열기/닫기<br />
+    -: 패널 열기/닫기<br />
     치트로 낸 기록은 랭킹에 올라가지 않습니다.
   </div>
 </div>
@@ -577,9 +577,11 @@ function setupCheatPanel() {
     panel.style.display = "none";
   });
 
-  // F2로 패널 열고 닫기
+  // -(마이너스) 키로 패널 열고 닫기 (입력창에 포커스 중이면 무시)
   window.addEventListener("keydown", (e) => {
-    if (e.key === "F2") {
+    if (e.key === "-" && !e.ctrlKey && !e.metaKey) {
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
       e.preventDefault();
       panel.style.display = panel.style.display === "none" ? "block" : "none";
     }
