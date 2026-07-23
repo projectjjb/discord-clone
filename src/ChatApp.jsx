@@ -620,6 +620,7 @@ function LicenseModal({ onSubmitCode, onSubmitPassword, error, errorMsg, checkin
   const [loginName, setLoginName] = useState("");
   const [loginPw, setLoginPw] = useState("");
   const firstInputRef = useRef(null);
+  const pwInputRef = useRef(null);
 
   useEffect(() => {
     firstInputRef.current?.focus();
@@ -728,13 +729,20 @@ function LicenseModal({ onSubmitCode, onSubmitPassword, error, errorMsg, checkin
               ref={firstInputRef}
               value={loginName}
               onChange={(e) => setLoginName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submit()}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                // 비밀번호가 비어있으면 전송하지 않고 비밀번호 칸으로 이동
+                if (!loginPw) pwInputRef.current?.focus();
+                else submit();
+              }}
               placeholder="관리자에게 받은 이름"
               disabled={checking}
               style={inputStyle}
             />
             <label style={{ ...labelStyle, display: "block", marginTop: 14 }}>비밀번호</label>
             <input
+              ref={pwInputRef}
               type="password"
               value={loginPw}
               onChange={(e) => setLoginPw(e.target.value)}
@@ -2322,6 +2330,110 @@ function DocsView({ currentUser, serverName }) {
   );
 }
 
+// ---------- 인트로 화면 (로그인 후 잠깐 표시) ----------
+function IntroScreen({ onDone }) {
+  const [phase, setPhase] = useState(0); // 0: 등장, 1: 유지, 2: 사라짐
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setPhase(1), 100);
+    const t2 = setTimeout(() => setPhase(2), 2200);
+    const t3 = setTimeout(() => onDone(), 2900);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
+  }, [onDone]);
+
+  return (
+    <div
+      onClick={onDone}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "#0b0b0d",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 200,
+        cursor: "pointer",
+        opacity: phase === 2 ? 0 : 1,
+        transition: "opacity 0.7s ease",
+        overflow: "hidden",
+      }}
+    >
+      {/* 위아래 얇은 선 */}
+      <div
+        style={{
+          width: phase >= 1 ? 420 : 0,
+          maxWidth: "80vw",
+          height: 1,
+          background: "linear-gradient(90deg, transparent, #6b6f7a, transparent)",
+          transition: "width 1.1s cubic-bezier(0.16, 1, 0.3, 1)",
+          marginBottom: 28,
+        }}
+      />
+
+      <div
+        style={{
+          fontFamily: "'Times New Roman', Georgia, serif",
+          fontSize: "clamp(34px, 7vw, 68px)",
+          letterSpacing: phase >= 1 ? "0.28em" : "0.7em",
+          color: "#f2f2f0",
+          fontWeight: 400,
+          textIndent: "0.28em",
+          opacity: phase >= 1 ? 1 : 0,
+          transition: "letter-spacing 1.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 1.1s ease",
+          whiteSpace: "nowrap",
+        }}
+      >
+        JSDCH
+      </div>
+
+      <div
+        style={{
+          fontFamily: "'Times New Roman', Georgia, serif",
+          fontSize: "clamp(11px, 2vw, 15px)",
+          letterSpacing: "0.55em",
+          color: "#8a8d96",
+          marginTop: 14,
+          textIndent: "0.55em",
+          opacity: phase >= 1 ? 1 : 0,
+          transition: "opacity 1.4s ease 0.4s",
+        }}
+      >
+        INCORPORATED
+      </div>
+
+      <div
+        style={{
+          width: phase >= 1 ? 420 : 0,
+          maxWidth: "80vw",
+          height: 1,
+          background: "linear-gradient(90deg, transparent, #6b6f7a, transparent)",
+          transition: "width 1.1s cubic-bezier(0.16, 1, 0.3, 1)",
+          marginTop: 28,
+        }}
+      />
+
+      <div
+        style={{
+          position: "absolute",
+          bottom: 40,
+          color: "#3a3d45",
+          fontSize: 11,
+          letterSpacing: "0.2em",
+          opacity: phase >= 1 ? 1 : 0,
+          transition: "opacity 1s ease 1.2s",
+        }}
+      >
+        EST. 2026
+      </div>
+    </div>
+  );
+}
+
 // ---------- 사용법 안내 ----------
 const GUIDE_SECTIONS = [
   {
@@ -2463,6 +2575,240 @@ function GuideModal({ onClose }) {
   );
 }
 
+// ---------- 마이페이지 (설정 허브) ----------
+function MyPageModal({
+  currentUser,
+  currentCode,
+  displayNameText,
+  avatarUrl,
+  color,
+  isAdmin,
+  onOpenProfile,
+  onOpenPassword,
+  onOpenGuide,
+  onClose,
+}) {
+  const [deleting, setDeleting] = useState(false);
+  const [deleteErr, setDeleteErr] = useState("");
+
+  const menuItems = [
+    { icon: "👤", label: "프로필 수정", desc: "닉네임 · 프로필 사진 · 색상", action: onOpenProfile },
+    { icon: "🔑", label: "비밀번호", desc: "설정하거나 변경하기", action: onOpenPassword },
+    { icon: "📖", label: "사용법", desc: "채팅 · 문서 문법 전체 보기", action: onOpenGuide },
+  ];
+
+  async function deleteMyAccount() {
+    const confirmed = window.confirm(
+      "정말 내 계정을 삭제할까요?\n\n" +
+        "· 이 라이선스 코드로 다시 접속할 수 없게 됩니다\n" +
+        "· 닉네임, 프로필 사진, 비밀번호 설정이 모두 사라집니다\n" +
+        "· 이미 보낸 메시지는 남아 있습니다\n\n" +
+        "이 작업은 되돌릴 수 없습니다."
+    );
+    if (!confirmed) return;
+
+    const typed = window.prompt(`확인을 위해 본인 이름(${currentUser})을 정확히 입력해주세요.`);
+    if (typed !== currentUser) {
+      if (typed !== null) setDeleteErr("이름이 일치하지 않아 취소되었습니다.");
+      return;
+    }
+
+    setDeleting(true);
+    setDeleteErr("");
+    try {
+      await sbDelete("whitelist", `code=eq.${encodeURIComponent(currentCode)}`);
+      alert("계정이 삭제되었습니다. 접속을 종료합니다.");
+      window.location.reload();
+    } catch (e) {
+      setDeleteErr(`삭제 실패: ${e.message}`);
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 70,
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+      }}
+    >
+      <div
+        style={{
+          background: "#313338",
+          borderRadius: 8,
+          width: 480,
+          maxWidth: "92vw",
+          maxHeight: "85vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
+        }}
+      >
+        {/* 프로필 헤더 */}
+        <div
+          style={{
+            padding: "24px 26px",
+            borderBottom: "1px solid #26272b",
+            display: "flex",
+            alignItems: "center",
+            gap: 14,
+          }}
+        >
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <Avatar url={avatarUrl} color={color} label={displayNameText} size={64} />
+            <span
+              style={{
+                position: "absolute",
+                right: 0,
+                bottom: 0,
+                width: 16,
+                height: 16,
+                borderRadius: "50%",
+                background: "#23a55a",
+                border: "4px solid #313338",
+                boxSizing: "content-box",
+              }}
+            />
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: "#fff", fontSize: 20, fontWeight: 700 }}>{displayNameText}</div>
+            <div style={{ color: "#949ba4", fontSize: 13, marginTop: 2 }}>@{currentUser}</div>
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                marginTop: 6,
+                color: "#23a55a",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              <span
+                style={{ width: 8, height: 8, borderRadius: "50%", background: "#23a55a" }}
+              />
+              온라인
+              {isAdmin && (
+                <span style={{ color: "#faa61a", marginLeft: 6 }}>· 관리자</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 메뉴 */}
+        <div style={{ padding: 12, overflowY: "auto", flex: 1 }}>
+          {menuItems.map((item) => (
+            <div
+              key={item.label}
+              onClick={() => {
+                onClose();
+                item.action();
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 14,
+                padding: "13px 14px",
+                borderRadius: 6,
+                cursor: "pointer",
+                marginBottom: 4,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#3f4147")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <span style={{ fontSize: 22 }}>{item.icon}</span>
+              <div>
+                <div style={{ color: "#fff", fontSize: 15, fontWeight: 600 }}>{item.label}</div>
+                <div style={{ color: "#949ba4", fontSize: 12, marginTop: 1 }}>{item.desc}</div>
+              </div>
+              <span style={{ marginLeft: "auto", color: "#6d6f78" }}>›</span>
+            </div>
+          ))}
+
+          {/* 위험 구역 */}
+          <div
+            style={{
+              marginTop: 16,
+              paddingTop: 14,
+              borderTop: "1px solid #3f4147",
+            }}
+          >
+            <div
+              style={{
+                color: "#ed4245",
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                marginBottom: 8,
+                paddingLeft: 4,
+              }}
+            >
+              위험 구역
+            </div>
+            <div
+              onClick={deleting ? undefined : deleteMyAccount}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 14,
+                padding: "13px 14px",
+                borderRadius: 6,
+                cursor: deleting ? "default" : "pointer",
+                border: "1px solid rgba(237,66,69,0.35)",
+                opacity: deleting ? 0.6 : 1,
+              }}
+              onMouseEnter={(e) => {
+                if (!deleting) e.currentTarget.style.background = "rgba(237,66,69,0.12)";
+              }}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <span style={{ fontSize: 22 }}>🗑️</span>
+              <div>
+                <div style={{ color: "#ed4245", fontSize: 15, fontWeight: 600 }}>
+                  {deleting ? "삭제 중..." : "내 계정 삭제"}
+                </div>
+                <div style={{ color: "#949ba4", fontSize: 12, marginTop: 1 }}>
+                  이 코드로 다시 접속할 수 없게 됩니다
+                </div>
+              </div>
+            </div>
+            {deleteErr && (
+              <div style={{ color: "#ed4245", fontSize: 12, marginTop: 8, paddingLeft: 4 }}>
+                {deleteErr}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ padding: "14px 26px", borderTop: "1px solid #26272b" }}>
+          <button
+            onClick={onClose}
+            style={{
+              width: "100%",
+              padding: "10px 0",
+              borderRadius: 4,
+              border: "none",
+              background: "#4e5058",
+              color: "#fff",
+              fontWeight: 600,
+              fontSize: 14,
+              cursor: "pointer",
+            }}
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------- 서버 레일 아이콘 ----------
 function ServerIcon({ active, activeColor, title, onClick, children }) {
   const [hover, setHover] = useState(false);
@@ -2507,29 +2853,103 @@ function ServerIcon({ active, activeColor, title, onClick, children }) {
 }
 
 // ---------- 게임 뷰 ----------
-function GameView() {
+const GAMES = [
+  { id: "snake-hardcore", name: "SnakeGame", file: "/snake-hardcore.html" },
+];
+
+function GameView({ currentUser }) {
+  const [activeGame, setActiveGame] = useState(GAMES[0].id);
+  const game = GAMES.find((g) => g.id === activeGame) || GAMES[0];
+
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: "#313338" }}>
+    <div style={{ display: "flex", flex: 1, minWidth: 0 }}>
+      {/* 게임 목록 */}
       <div
         style={{
-          height: 48,
+          width: 240,
+          background: "#2b2d31",
           display: "flex",
-          alignItems: "center",
-          padding: "0 16px",
-          borderBottom: "1px solid #26272b",
-          color: "#fff",
-          fontWeight: 700,
-          fontSize: 15,
+          flexDirection: "column",
           flexShrink: 0,
         }}
       >
-        🐍 스네이크 게임
+        <div
+          style={{
+            height: 48,
+            display: "flex",
+            alignItems: "center",
+            padding: "0 16px",
+            borderBottom: "1px solid #1e1f22",
+            color: "#fff",
+            fontWeight: 700,
+            fontSize: 15,
+          }}
+        >
+          게임
+        </div>
+        <div style={{ flex: 1, padding: "12px 8px", overflowY: "auto" }}>
+          <div
+            style={{
+              color: "#949ba4",
+              fontSize: 12,
+              fontWeight: 700,
+              padding: "0 8px",
+              marginBottom: 6,
+              textTransform: "uppercase",
+            }}
+          >
+            게임 채널
+          </div>
+          {GAMES.map((g) => (
+            <div
+              key={g.id}
+              onClick={() => setActiveGame(g.id)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "7px 8px",
+                borderRadius: 4,
+                marginBottom: 2,
+                cursor: "pointer",
+                background: activeGame === g.id ? "#3f4248" : "transparent",
+                color: activeGame === g.id ? "#fff" : "#949ba4",
+                fontSize: 15,
+                fontWeight: 500,
+              }}
+            >
+              <span style={{ color: "#80848e", fontSize: 18 }}>#</span>
+              {g.name}
+            </div>
+          ))}
+        </div>
       </div>
-      <iframe
-        src="/snake.html"
-        title="Snake Game"
-        style={{ flex: 1, width: "100%", border: "none", background: "#111" }}
-      />
+
+      {/* 게임 화면 */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: "#313338" }}>
+        <div
+          style={{
+            height: 48,
+            display: "flex",
+            alignItems: "center",
+            padding: "0 16px",
+            borderBottom: "1px solid #26272b",
+            color: "#fff",
+            fontWeight: 700,
+            fontSize: 15,
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ color: "#80848e", fontSize: 20, marginRight: 6 }}>#</span>
+          {game.name}
+        </div>
+        <iframe
+          key={game.id}
+          src={`${game.file}?player=${encodeURIComponent(currentUser)}`}
+          title={game.name}
+          style={{ flex: 1, width: "100%", border: "none", background: "#111" }}
+        />
+      </div>
     </div>
   );
 }
@@ -2542,6 +2962,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const [showProfile, setShowProfile] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  const [showMyPage, setShowMyPage] = useState(false);
 
   // Tab 키를 누르고 있는 동안 스포일러 전체 보기
   useTabRevealSpoilers();
@@ -2639,13 +3060,16 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const bottomRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const isNearBottomRef = useRef(true); // 사용자가 맨 아래 근처를 보고 있는지
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
 
   function handleScroll() {
     const el = scrollContainerRef.current;
     if (!el) return;
     // 맨 아래에서 120px 이내면 "하단을 보고 있다"고 판단
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    isNearBottomRef.current = distanceFromBottom < 120;
+    const near = distanceFromBottom < 120;
+    isNearBottomRef.current = near;
+    setShowJumpToBottom(!near);
   }
   const fileInputRef = useRef(null);
 
@@ -2756,32 +3180,49 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const scrollToBottom = (smooth = true) => {
     const el = scrollContainerRef.current;
     if (el) {
-      el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+      el.scrollTop = el.scrollHeight; // 즉시 반영 (가장 확실한 방법)
+      if (smooth) {
+        el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      }
+      setShowJumpToBottom(false);
     } else {
       bottomRef.current?.scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
     }
   };
 
-  // 렌더링/이미지 로딩 타이밍 때문에 한 번만으로는 부족해서 여러 번 시도
+  // "무조건 맨 아래로 붙어있기" 모드 — 채널을 열거나 메시지를 보낸 직후
+  const stickUntilRef = useRef(0);
   const forceScrollBottom = () => {
     isNearBottomRef.current = true;
-    [0, 60, 180, 400, 800].forEach((delay) => {
-      setTimeout(() => {
-        if (isNearBottomRef.current) scrollToBottom(false);
-      }, delay);
-    });
+    setShowJumpToBottom(false);
+    // 앞으로 1.5초 동안은 콘텐츠 높이가 변할 때마다 계속 맨 아래로 따라감
+    stickUntilRef.current = Date.now() + 1500;
+    scrollToBottom(false);
   };
+
+  // 콘텐츠 높이가 바뀔 때(이미지 로딩, 폰트 적용 등) 자동으로 하단 유지
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(() => {
+      // 초기 진입 직후이거나, 사용자가 하단을 보고 있으면 계속 따라 내려감
+      if (Date.now() < stickUntilRef.current || isNearBottomRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+
+    observer.observe(el);
+    // 자식 요소(메시지 목록)의 높이 변화도 감지
+    Array.from(el.children).forEach((child) => observer.observe(child));
+
+    return () => observer.disconnect();
+  }, [activeChannel, currentView]);
 
   // 메시지가 바뀌면, 사용자가 이미 하단 근처를 보고 있을 때만 따라 내려감
   // (위로 스크롤해서 예전 메시지 보는 중이면 방해하지 않음)
   useEffect(() => {
-    if (isNearBottomRef.current) {
-      scrollToBottom(true);
-      const t = setTimeout(() => {
-        if (isNearBottomRef.current) scrollToBottom(false);
-      }, 120);
-      return () => clearTimeout(t);
-    }
+    if (isNearBottomRef.current) scrollToBottom(false);
   }, [messages]);
 
   // 채널을 새로 열거나 처음 접속했을 때 확실히 맨 아래로
@@ -3084,12 +3525,60 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
             <circle cx="18.5" cy="13.5" r="1" fill="currentColor" />
           </svg>
         </ServerIcon>
+        <div style={{ flex: 1 }} />
+
+        <div style={{ paddingBottom: 12 }}>
+          <ServerIcon
+            active={false}
+            activeColor="#4e5058"
+            title="설정 / 마이페이지"
+            onClick={() => setShowMyPage(true)}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </ServerIcon>
+        </div>
       </div>
+
+      {showMyPage && (
+        <MyPageModal
+          currentUser={currentUser}
+          currentCode={currentCode}
+          displayNameText={displayName(currentUser)}
+          avatarUrl={myAvatarUrl}
+          color={userColor(currentUser)}
+          isAdmin={isAdmin}
+          onOpenProfile={() => setShowProfile(true)}
+          onOpenPassword={() => setShowPasswordModal(true)}
+          onOpenGuide={() => setShowGuide(true)}
+          onClose={() => setShowMyPage(false)}
+        />
+      )}
+      {showGuide && <GuideModal onClose={() => setShowGuide(false)} />}
+      {showProfile && (
+        <ProfileModal
+          currentUser={currentUser}
+          nickname={nickname}
+          currentColor={myColor || avatarColor(currentUser)}
+          currentAvatarUrl={myAvatarUrl}
+          onSave={saveProfile}
+          onClose={() => setShowProfile(false)}
+        />
+      )}
+      {showPasswordModal && (
+        <PasswordSettingsModal
+          currentUser={currentUser}
+          currentCode={currentCode}
+          onClose={() => setShowPasswordModal(false)}
+        />
+      )}
 
       {currentView === "docs" ? (
         <DocsView currentUser={currentUser} serverName="공유 문서" />
       ) : currentView === "game" ? (
-        <GameView />
+        <GameView currentUser={currentUser} />
       ) : (
       <>
       {/* 채널 목록 */}
@@ -3257,12 +3746,28 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
             cursor: "pointer",
           }}
         >
-          <Avatar
-            url={myAvatarUrl}
-            color={userColor(currentUser)}
-            label={displayName(currentUser)}
-            size={32}
-          />
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <Avatar
+              url={myAvatarUrl}
+              color={userColor(currentUser)}
+              label={displayName(currentUser)}
+              size={32}
+            />
+            <span
+              title="온라인"
+              style={{
+                position: "absolute",
+                right: -1,
+                bottom: -1,
+                width: 11,
+                height: 11,
+                borderRadius: "50%",
+                background: "#23a55a",
+                border: "3px solid #232428",
+                boxSizing: "content-box",
+              }}
+            />
+          </div>
           <div style={{ minWidth: 0 }}>
             <div style={{ color: "#fff", fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {displayName(currentUser)}
@@ -3273,27 +3778,6 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
           </div>
         </div>
       </div>
-
-      {showProfile && (
-        <ProfileModal
-          currentUser={currentUser}
-          nickname={nickname}
-          currentColor={myColor || avatarColor(currentUser)}
-          currentAvatarUrl={myAvatarUrl}
-          onSave={saveProfile}
-          onClose={() => setShowProfile(false)}
-        />
-      )}
-
-      {showGuide && <GuideModal onClose={() => setShowGuide(false)} />}
-
-      {showPasswordModal && (
-        <PasswordSettingsModal
-          currentUser={currentUser}
-          currentCode={currentCode}
-          onClose={() => setShowPasswordModal(false)}
-        />
-      )}
 
       {/* 채팅 영역 */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -3586,6 +4070,43 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
         </div>
 
         <div style={{ padding: "0 16px 24px", position: "relative" }}>
+          {/* 최신 메시지로 이동 */}
+          {showJumpToBottom && (
+            <div
+              onClick={() => {
+                isNearBottomRef.current = true;
+                scrollToBottom(true);
+              }}
+              style={{
+                position: "absolute",
+                bottom: "100%",
+                left: 16,
+                right: 16,
+                marginBottom: 8,
+                background: "#3f4147",
+                borderRadius: 8,
+                padding: "8px 14px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                cursor: "pointer",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+                zIndex: 35,
+              }}
+            >
+              <span style={{ color: "#dbdee1", fontSize: 13, fontWeight: 600 }}>
+                최신 메시지 보기
+                {messages.length > 0 && (
+                  <span style={{ color: "#949ba4", fontWeight: 400, marginLeft: 8 }}>
+                    {formatTime(messages[messages.length - 1].created_at)}
+                  </span>
+                )}
+              </span>
+              <span style={{ color: "#dbdee1", fontSize: 16, lineHeight: 1 }}>↓</span>
+            </div>
+          )}
+
           {/* / 명령어 도움말 */}
           {showHelp && (
             <div
@@ -4045,7 +4566,7 @@ export default function App() {
       if (rows.length > 0) {
         const match = rows[0];
         applyUser(match);
-        setStage("chat");
+        setStage("intro");
       } else {
         // 코드가 틀리면 접속 종료
         setStage("killed");
@@ -4091,7 +4612,7 @@ export default function App() {
         return;
       }
       applyUser(match);
-      setStage("chat");
+      setStage("intro");
     } catch (e) {
       setLicenseError(true);
       setLicenseErrorMsg(`연결 실패: ${e.message}`);
@@ -4100,6 +4621,10 @@ export default function App() {
   }
 
   if (stage === "killed") return <KilledScreen />;
+
+  if (stage === "intro") {
+    return <IntroScreen onDone={() => setStage("chat")} />;
+  }
 
   if (stage === "chat") {
     return (
