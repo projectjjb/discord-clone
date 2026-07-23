@@ -718,8 +718,11 @@ function LicenseModal({ onSubmitCode, onSubmitPassword, error, errorMsg, checkin
               disabled={checking}
               style={inputStyle}
             />
-            <div style={{ color: "#949ba4", fontSize: 12, marginTop: 6 }}>
+            <div style={{ color: "#949ba4", fontSize: 12, marginTop: 8, lineHeight: 1.6 }}>
               처음 접속하거나 비밀번호를 잊었다면 관리자에게 받은 코드로 들어오세요.
+              <br />
+              접속 후 <b style={{ color: "#dbdee1" }}>⚙️ 설정 → 🔑 비밀번호</b>에서 비밀번호를
+              만들면 다음부터는 이름 + 비밀번호로 바로 들어올 수 있어요.
             </div>
           </div>
         ) : (
@@ -751,9 +754,10 @@ function LicenseModal({ onSubmitCode, onSubmitPassword, error, errorMsg, checkin
               disabled={checking}
               style={inputStyle}
             />
-            <div style={{ color: "#949ba4", fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
-              비밀번호는 접속 후 왼쪽 아래 <b style={{ color: "#dbdee1" }}>🔑 비밀번호 설정</b>에서
-              정할 수 있어요. 아직 안 정했다면 라이선스 코드 탭으로 들어오세요.
+            <div style={{ color: "#949ba4", fontSize: 12, marginTop: 8, lineHeight: 1.6 }}>
+              아직 비밀번호가 없다면 <b style={{ color: "#dbdee1" }}>라이선스 코드</b> 탭으로 먼저
+              접속하세요. 그다음 왼쪽 아래{" "}
+              <b style={{ color: "#dbdee1" }}>⚙️ 설정 → 🔑 비밀번호</b>에서 만들 수 있어요.
             </div>
           </div>
         )}
@@ -908,7 +912,8 @@ function ProfileModal({ currentUser, nickname, currentColor, currentAvatarUrl, o
     setSaving(false);
     if (ok) {
       setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
+      // 저장 완료 표시를 잠깐 보여준 뒤 자동으로 닫기
+      setTimeout(() => onClose(), 600);
     }
   }
 
@@ -1153,6 +1158,8 @@ function PasswordSettingsModal({ currentUser, currentCode, onClose }) {
       setNewPw2("");
       setIsError(false);
       setMsg("비밀번호가 저장되었습니다 ✓");
+      // 저장 완료 표시를 잠깐 보여준 뒤 자동으로 닫기
+      setTimeout(() => onClose(), 800);
     } catch (e) {
       setIsError(true);
       setMsg(`저장 실패: ${e.message}`);
@@ -2017,6 +2024,7 @@ function DocTree({
   activeDocId,
   onSelect,
   onDelete,
+  onRename,
   onCreateDoc,
   onCreateFolder,
   onMove,
@@ -2024,6 +2032,27 @@ function DocTree({
   setDragId,
 }) {
   const children = docs.filter((d) => (d.parent_id ?? null) === parentId);
+  const [editingId, setEditingId] = useState(null);
+  const [editingTitle, setEditingTitle] = useState("");
+
+  function startRename(d) {
+    setEditingId(d.id);
+    setEditingTitle(d.title);
+  }
+
+  function cancelRename() {
+    setEditingId(null);
+    setEditingTitle("");
+  }
+
+  function commitRename(d) {
+    if (editingId !== d.id) return;
+    const trimmed = editingTitle.trim();
+    setEditingId(null);
+    setEditingTitle("");
+    if (trimmed && trimmed !== d.title) onRename(d, trimmed);
+  }
+
   if (children.length === 0) return null;
 
   return (
@@ -2055,6 +2084,11 @@ function DocTree({
                 if (isFolder) setExpanded((p) => ({ ...p, [d.id]: !p[d.id] }));
                 else onSelect(d.id);
               }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                startRename(d);
+              }}
+              title="더블클릭하면 이름을 바꿀 수 있어요"
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -2092,17 +2126,45 @@ function DocTree({
 
               <span style={{ flexShrink: 0, fontSize: 14 }}>{isFolder ? (isOpen ? "📂" : "📁") : "📄"}</span>
 
-              <span
-                style={{
-                  flex: 1,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  fontWeight: isFolder ? 600 : 400,
-                }}
-              >
-                {d.title}
-              </span>
+              {editingId === d.id ? (
+                <input
+                  autoFocus
+                  value={editingTitle}
+                  onChange={(e) => setEditingTitle(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") commitRename(d);
+                    if (e.key === "Escape") cancelRename();
+                  }}
+                  onBlur={() => commitRename(d)}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    background: "#1e1f22",
+                    border: "none",
+                    outline: "1px solid #5865F2",
+                    borderRadius: 3,
+                    color: "#fff",
+                    fontSize: 14,
+                    fontWeight: isFolder ? 600 : 400,
+                    padding: "2px 5px",
+                  }}
+                />
+              ) : (
+                <span
+                  style={{
+                    flex: 1,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    fontWeight: isFolder ? 600 : 400,
+                  }}
+                >
+                  {d.title}
+                </span>
+              )}
 
               {/* 폴더면 안에 새로 만들기 버튼 */}
               {isFolder && (
@@ -2133,6 +2195,16 @@ function DocTree({
               <span
                 onClick={(e) => {
                   e.stopPropagation();
+                  startRename(d);
+                }}
+                title="이름 바꾸기"
+                style={{ color: "#6d6f78", fontSize: 12, padding: "0 3px", flexShrink: 0 }}
+              >
+                ✎
+              </span>
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
                   onDelete(d);
                 }}
                 title="삭제"
@@ -2153,6 +2225,7 @@ function DocTree({
                 activeDocId={activeDocId}
                 onSelect={onSelect}
                 onDelete={onDelete}
+                onRename={onRename}
                 onCreateDoc={onCreateDoc}
                 onCreateFolder={onCreateFolder}
                 onMove={onMove}
@@ -2330,6 +2403,21 @@ function DocsView({ currentUser, serverName }) {
     }
   }
 
+  // 문서/폴더 이름 변경 (트리에서 인라인으로 편집)
+  async function renameDoc(item, newTitle) {
+    const trimmed = (newTitle || "").trim();
+    if (!trimmed || trimmed === item.title) return;
+
+    setDocs((prev) => prev.map((d) => (d.id === item.id ? { ...d, title: trimmed } : d)));
+    if (activeDocId === item.id) setTitle(trimmed);
+    try {
+      await sbUpdate("documents", `id=eq.${item.id}`, { title: trimmed });
+    } catch (e) {
+      setErr(`이름 변경 실패: ${e.message}`);
+      setDocs((prev) => prev.map((d) => (d.id === item.id ? { ...d, title: item.title } : d)));
+    }
+  }
+
   // 문서를 다른 폴더로 이동
   async function moveDoc(docId, newParentId) {
     if (docId === newParentId) return;
@@ -2429,6 +2517,7 @@ function DocsView({ currentUser, serverName }) {
             activeDocId={activeDocId}
             onSelect={setActiveDocId}
             onDelete={deleteDoc}
+            onRename={renameDoc}
             onCreateDoc={createDoc}
             onCreateFolder={createFolder}
             onMove={moveDoc}
@@ -3465,9 +3554,28 @@ const GAMES = [
   { id: "snake-hardcore", name: "SnakeGame", file: "/snake-hardcore.html" },
 ];
 
-function GameView({ currentUser }) {
+function GameView({ currentUser, isAdmin }) {
   const [activeGame, setActiveGame] = useState(GAMES[0].id);
+  const [fileStatus, setFileStatus] = useState("checking"); // checking | ok | missing
   const game = GAMES.find((g) => g.id === activeGame) || GAMES[0];
+
+  // 게임 파일이 실제로 배포되어 있는지 확인 (없으면 Vercel 404 대신 안내 표시)
+  useEffect(() => {
+    let cancelled = false;
+    setFileStatus("checking");
+    fetch(game.file, { method: "GET" })
+      .then((res) => {
+        if (cancelled) return;
+        // Vercel의 404 페이지는 HTML을 돌려주므로 상태코드로 판단
+        setFileStatus(res.ok ? "ok" : "missing");
+      })
+      .catch(() => {
+        if (!cancelled) setFileStatus("missing");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [game.file]);
 
   return (
     <div style={{ display: "flex", flex: 1, minWidth: 0 }}>
@@ -3551,12 +3659,72 @@ function GameView({ currentUser }) {
           <span style={{ color: "#80848e", fontSize: 20, marginRight: 6 }}>#</span>
           {game.name}
         </div>
-        <iframe
-          key={game.id}
-          src={`${game.file}?player=${encodeURIComponent(currentUser)}`}
-          title={game.name}
-          style={{ flex: 1, width: "100%", border: "none", background: "#111" }}
-        />
+        {fileStatus === "checking" && (
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#6d6f78",
+              fontSize: 14,
+            }}
+          >
+            게임을 불러오는 중...
+          </div>
+        )}
+
+        {fileStatus === "missing" && (
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 24,
+            }}
+          >
+            <div style={{ maxWidth: 460, textAlign: "left" }}>
+              <div style={{ color: "#faa61a", fontSize: 17, fontWeight: 700, marginBottom: 10 }}>
+                게임 파일을 찾을 수 없습니다
+              </div>
+              <div style={{ color: "#b5bac1", fontSize: 14, lineHeight: 1.7 }}>
+                <code style={{ color: "#00a8fc" }}>{game.file}</code> 파일이 아직 배포되지
+                않았어요. GitHub 저장소에 아래 경로로 파일을 올리면 해결됩니다.
+              </div>
+              <div
+                style={{
+                  background: "#1e1f22",
+                  borderRadius: 6,
+                  padding: "12px 14px",
+                  marginTop: 14,
+                  color: "#dbdee1",
+                  fontSize: 13,
+                  lineHeight: 1.8,
+                  fontFamily: "ui-monospace, Consolas, monospace",
+                }}
+              >
+                public{game.file}
+              </div>
+              <div style={{ color: "#949ba4", fontSize: 12, marginTop: 12, lineHeight: 1.7 }}>
+                Add file → Create new file → 위 경로를 그대로 입력 → 게임 HTML 붙여넣기 → Commit
+                <br />
+                올린 뒤에는 Vercel 재배포가 끝날 때까지 1~2분 기다렸다가 새로고침하세요.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {fileStatus === "ok" && (
+          <iframe
+            key={game.id}
+            src={`${game.file}?player=${encodeURIComponent(currentUser)}${
+              isAdmin ? "&admin=1" : ""
+            }`}
+            title={game.name}
+            style={{ flex: 1, width: "100%", border: "none", background: "#111" }}
+          />
+        )}
       </div>
     </div>
   );
@@ -4227,7 +4395,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
       {currentView === "docs" ? (
         <DocsView currentUser={currentUser} serverName="공유 문서" />
       ) : currentView === "game" ? (
-        <GameView currentUser={currentUser} />
+        <GameView currentUser={currentUser} isAdmin={isAdmin} />
       ) : (
       <>
       {/* 채널 목록 */}
@@ -4324,41 +4492,6 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
         </div>
 
         <StorageGauge usageBytes={storageUsage} />
-
-        <div style={{ padding: "8px 8px 0", display: "flex", gap: 6 }}>
-          <button
-            onClick={() => setShowGuide(true)}
-            style={{
-              flex: 1,
-              padding: "9px 0",
-              borderRadius: 4,
-              border: "none",
-              background: "#3f4147",
-              color: "#dbdee1",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            📖 사용법
-          </button>
-          <button
-            onClick={() => setShowPasswordModal(true)}
-            style={{
-              flex: 1,
-              padding: "9px 0",
-              borderRadius: 4,
-              border: "none",
-              background: "#3f4147",
-              color: "#dbdee1",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            🔑 비밀번호
-          </button>
-        </div>
 
         {isAdmin && (
           <div style={{ padding: 8 }}>
