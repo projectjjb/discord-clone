@@ -566,6 +566,18 @@ function FakeNotFound({ onUnlock }) {
     return () => window.removeEventListener("keydown", handler);
   }, [onUnlock]);
 
+  // 모바일/태블릿에서는 "The"를 빠르게 두 번 탭하면 진입
+  const lastTapRef = useRef(0);
+  function handleTheTap() {
+    const now = Date.now();
+    if (now - lastTapRef.current < 500) {
+      lastTapRef.current = 0;
+      onUnlock();
+    } else {
+      lastTapRef.current = now;
+    }
+  }
+
   return (
     <div
       style={{
@@ -588,7 +600,14 @@ function FakeNotFound({ onUnlock }) {
         This page isn't working
       </div>
       <div style={{ fontSize: 14, color: "#9a9a9a", marginTop: 10 }}>
-        The requested URL was not found on this server.
+        <span
+          onClick={handleTheTap}
+          onDoubleClick={onUnlock}
+          style={{ cursor: "default", WebkitTapHighlightColor: "transparent" }}
+        >
+          The
+        </span>{" "}
+        requested URL was not found on this server.
       </div>
     </div>
   );
@@ -1522,29 +1541,61 @@ function AdminPanel({ currentCode, onClose }) {
   );
 }
 
+
 // ---------- 스포일러 ----------
-// 열어본 스포일러는 브라우저에 기록해서, 한 번 열면 계속 열린 상태로 유지
-function getOpenedSpoilers() {
-  try {
-    return JSON.parse(localStorage.getItem("openedSpoilers") || "{}");
-  } catch {
-    return {};
-  }
+// 새로고침하면 다시 가려짐(저장하지 않음). Tab 키를 누르고 있으면 전체가 보임.
+const SPOILER_BG = "#5c6067"; // 적당히 밝은 회색
+const SPOILER_BG_OPEN = "rgba(255,255,255,0.07)";
+
+// Tab 키로 전체 스포일러를 잠깐 보여주기 위한 전역 스타일 + 키 리스너
+const SPOILER_STYLE_ID = "spoiler-global-style";
+function ensureSpoilerStyle() {
+  if (typeof document === "undefined") return;
+  if (document.getElementById(SPOILER_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = SPOILER_STYLE_ID;
+  style.textContent = `
+    body.reveal-spoilers [data-spoiler] {
+      background: ${SPOILER_BG_OPEN} !important;
+      color: inherit !important;
+    }
+    body.reveal-spoilers .spoiler-cover {
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+  `;
+  document.head.appendChild(style);
 }
 
-function markSpoilerOpened(key) {
-  try {
-    const opened = getOpenedSpoilers();
-    opened[key] = true;
-    localStorage.setItem("openedSpoilers", JSON.stringify(opened));
-  } catch {
-    // localStorage 사용 불가 시 무시
-  }
+function useTabRevealSpoilers() {
+  useEffect(() => {
+    ensureSpoilerStyle();
+    function onKeyDown(e) {
+      if (e.key === "Tab") {
+        e.preventDefault(); // 포커스 이동 막기
+        document.body.classList.add("reveal-spoilers");
+      }
+    }
+    function onKeyUp(e) {
+      if (e.key === "Tab") document.body.classList.remove("reveal-spoilers");
+    }
+    function onBlur() {
+      document.body.classList.remove("reveal-spoilers");
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
 }
 
-// 스포일러 이미지 (흐리게 가려졌다가 클릭하면 열림)
-function SpoilerImage({ src, spoilerKey, onOpen }) {
-  const [revealed, setRevealed] = useState(() => Boolean(getOpenedSpoilers()[spoilerKey]));
+// 스포일러 이미지 (회색으로 덮여 있다가 클릭하면 열림)
+function SpoilerImage({ src, onOpen }) {
+  const [revealed, setRevealed] = useState(false);
 
   return (
     <div
@@ -1561,12 +1612,8 @@ function SpoilerImage({ src, spoilerKey, onOpen }) {
         src={src}
         alt="첨부 이미지"
         onClick={() => {
-          if (revealed) {
-            window.open(src, "_blank");
-          } else {
-            markSpoilerOpened(spoilerKey);
-            setRevealed(true);
-          }
+          if (revealed) window.open(src, "_blank");
+          else setRevealed(true);
         }}
         onLoad={onOpen}
         style={{
@@ -1574,21 +1621,17 @@ function SpoilerImage({ src, spoilerKey, onOpen }) {
           maxWidth: 480,
           minWidth: 220,
           maxHeight: 480,
-          borderRadius: 8,
+          borderRadius: 10,
           display: "block",
           cursor: "pointer",
           objectFit: "contain",
           background: "#1e1f22",
-          filter: revealed ? "none" : "blur(28px)",
-          transition: "filter 0.2s",
         }}
       />
       {!revealed && (
         <div
-          onClick={() => {
-            markSpoilerOpened(spoilerKey);
-            setRevealed(true);
-          }}
+          className="spoiler-cover"
+          onClick={() => setRevealed(true)}
           style={{
             position: "absolute",
             inset: 0,
@@ -1596,13 +1639,14 @@ function SpoilerImage({ src, spoilerKey, onOpen }) {
             alignItems: "center",
             justifyContent: "center",
             cursor: "pointer",
-            background: "#0a0a0a",
-            borderRadius: 8,
+            background: SPOILER_BG,
+            borderRadius: 10,
+            transition: "opacity 0.15s",
           }}
         >
           <div
             style={{
-              background: "rgba(255,255,255,0.12)",
+              background: "rgba(0,0,0,0.3)",
               color: "#fff",
               fontSize: 13,
               fontWeight: 600,
@@ -1618,38 +1662,6 @@ function SpoilerImage({ src, spoilerKey, onOpen }) {
   );
 }
 
-// 개별 스포일러 조각
-function SpoilerText({ spoilerKey, children }) {
-  const [revealed, setRevealed] = useState(() => Boolean(getOpenedSpoilers()[spoilerKey]));
-
-  if (revealed) {
-    return <span style={{ background: "rgba(255,255,255,0.06)", borderRadius: 3, padding: "0 2px" }}>{children}</span>;
-  }
-
-  return (
-    <span
-      onClick={(e) => {
-        e.stopPropagation();
-        markSpoilerOpened(spoilerKey);
-        setRevealed(true);
-      }}
-      title="클릭해서 보기"
-      style={{
-        background: "#1a1b1e",
-        color: "transparent",
-        borderRadius: 3,
-        padding: "0 4px",
-        cursor: "pointer",
-        userSelect: "none",
-        boxShadow: "inset 0 0 0 1px #111214",
-      }}
-    >
-      {children}
-    </span>
-  );
-}
-
-// 메시지 본문 렌더링 (마크다운 + <스포일러> + @멘션 처리)
 function MessageBody({ text, messageId, mentionNames = [], me = "" }) {
   const ref = useRef(null);
 
@@ -1660,32 +1672,20 @@ function MessageBody({ text, messageId, mentionNames = [], me = "" }) {
     keyPrefix: `msg${messageId}`,
   });
 
-  // 이미 열어본 스포일러는 처음부터 보이게, 클릭하면 열리게
+  // 스포일러 클릭하면 열림 (새로고침하면 다시 가려짐)
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const opened = getOpenedSpoilers();
-
-    function reveal(node) {
-      node.style.background = "rgba(255,255,255,0.06)";
-      node.style.color = "inherit";
-      node.style.boxShadow = "none";
-      node.style.cursor = "auto";
-      node.style.userSelect = "auto";
-    }
-
-    el.querySelectorAll("[data-spoiler]").forEach((node) => {
-      if (opened[node.dataset.spoiler]) reveal(node);
-    });
 
     function onClick(e) {
       const node = e.target.closest?.("[data-spoiler]");
       if (!node || !el.contains(node)) return;
-      const key = node.dataset.spoiler;
-      if (opened[key]) return;
-      markSpoilerOpened(key);
-      opened[key] = true;
-      reveal(node);
+      if (node.dataset.revealed === "1") return;
+      node.dataset.revealed = "1";
+      node.style.background = SPOILER_BG_OPEN;
+      node.style.color = "inherit";
+      node.style.cursor = "auto";
+      node.style.userSelect = "auto";
     }
 
     el.addEventListener("click", onClick);
@@ -1720,7 +1720,7 @@ function renderInline(text, opts = {}) {
     t = t.replace(/<([^<>\n]+)>/g, (_, inner) => {
       const i = holds.length;
       holds.push(
-        `<span data-spoiler="${keyPrefix}-${i}" style="background:#1a1b1e;color:transparent;border-radius:3px;padding:0 4px;cursor:pointer;user-select:none;box-shadow:inset 0 0 0 1px #111214">${escapeHtml(
+        `<span data-spoiler="${keyPrefix}-${i}" style="background:${SPOILER_BG};color:transparent;border-radius:5px;padding:0 5px;cursor:pointer;user-select:none;transition:background 0.15s">${escapeHtml(
           inner
         )}</span>`
       );
@@ -1756,21 +1756,38 @@ function renderInline(text, opts = {}) {
     });
   }
 
+  // 이모지 단축코드 :heart: → ❤️
+  t = t.replace(/:([\w가-힣]+):/g, (full, name) => {
+    const found = EMOJI_LIST.find((e) =>
+      e.names.some((n) => n.toLowerCase() === name.toLowerCase())
+    );
+    return found ? found.e : full;
+  });
+
   // 이미지 ![alt](url) — 링크보다 먼저
   t = t.replace(
     /!\[([^\]]*)\]\(([^)\s]+)\)/g,
-    '<img src="$2" alt="$1" style="max-width:100%;border-radius:6px;margin:4px 0" />'
+    '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;margin:4px 0;display:block" />'
   );
   // 링크 [text](url)
   t = t.replace(
     /\[([^\]]+)\]\(([^)\s]+)\)/g,
     '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:#00a8fc;text-decoration:none">$1</a>'
   );
-  // 자동 링크 <http://...> 및 맨 URL
-  t = t.replace(
-    /(^|[\s(])(https?:\/\/[^\s<)]+)/g,
-    '$1<a href="$2" target="_blank" rel="noopener noreferrer" style="color:#00a8fc;text-decoration:none">$2</a>'
-  );
+  // 그냥 붙여넣은 URL 처리
+  //  - 이미지/GIF 주소면 바로 미리보기로 렌더링
+  //  - 그 외에는 클릭 가능한 링크로
+  t = t.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (full, pre, url) => {
+    const isImage = /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?[^\s]*)?$/i.test(url);
+    const isGifHost = /(tenor\.com|giphy\.com|gfycat\.com)\/[^\s]*/i.test(url);
+    if (isImage) {
+      return `${pre}<img src="${url}" alt="이미지" style="max-width:100%;max-height:420px;border-radius:8px;margin:4px 0;display:block" />`;
+    }
+    if (isGifHost) {
+      return `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#00a8fc;text-decoration:none">${url}</a>`;
+    }
+    return `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#00a8fc;text-decoration:none">${url}</a>`;
+  });
 
   // 굵은 기울임 ***text*** / ___text___
   t = t.replace(/\*\*\*([^*]+)\*\*\*/g, "<strong><em>$1</em></strong>");
@@ -1988,7 +2005,7 @@ function DocsView({ currentUser, serverName }) {
   const [activeDocId, setActiveDocId] = useState(null);
   const [content, setContent] = useState("");
   const [title, setTitle] = useState("");
-  const [mode, setMode] = useState("edit"); // edit | preview
+  const [mode, setMode] = useState("split"); // split / edit / preview
   const [loading, setLoading] = useState(true);
   const [savedAt, setSavedAt] = useState("");
   const [err, setErr] = useState("");
@@ -2232,62 +2249,67 @@ function DocsView({ currentUser, serverName }) {
                 <span style={{ color: "#6d6f78", fontSize: 12 }}>저장됨 {savedAt}</span>
               )}
               <div style={{ display: "flex", background: "#1e1f22", borderRadius: 6, padding: 3 }}>
-                <button
-                  onClick={() => setMode("edit")}
-                  style={{
-                    padding: "5px 12px",
-                    border: "none",
-                    borderRadius: 4,
-                    background: mode === "edit" ? "#404249" : "transparent",
-                    color: mode === "edit" ? "#fff" : "#949ba4",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  편집
-                </button>
-                <button
-                  onClick={() => setMode("preview")}
-                  style={{
-                    padding: "5px 12px",
-                    border: "none",
-                    borderRadius: 4,
-                    background: mode === "preview" ? "#404249" : "transparent",
-                    color: mode === "preview" ? "#fff" : "#949ba4",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  미리보기
-                </button>
+                {[
+                  ["split", "분할"],
+                  ["edit", "편집"],
+                  ["preview", "미리보기"],
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setMode(key)}
+                    style={{
+                      padding: "5px 12px",
+                      border: "none",
+                      borderRadius: 4,
+                      background: mode === key ? "#404249" : "transparent",
+                      color: mode === key ? "#fff" : "#949ba4",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             </div>
 
-            {/* 편집 / 미리보기 */}
-            <div style={{ flex: 1, overflowY: "auto", padding: "20px 28px" }}>
-              {mode === "edit" ? (
-                <textarea
-                  value={content}
-                  onChange={(e) => handleContentChange(e.target.value)}
-                  placeholder="여기에 작성하세요. 마크다운을 지원합니다.&#10;&#10;# 제목&#10;**굵게**  *기울임*  ~~취소선~~&#10;- 목록&#10;> 인용&#10;```코드```"
+            {/* 편집 / 실시간 미리보기 */}
+            <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+              {(mode === "split" || mode === "edit") && (
+                <div
                   style={{
-                    width: "100%",
-                    height: "100%",
-                    minHeight: 400,
-                    background: "transparent",
-                    border: "none",
-                    outline: "none",
-                    color: "#dbdee1",
-                    fontSize: 15,
-                    lineHeight: 1.6,
-                    resize: "none",
-                    fontFamily: "inherit",
+                    flex: 1,
+                    overflowY: "auto",
+                    padding: "20px 24px",
+                    borderRight: mode === "split" ? "1px solid #26272b" : "none",
+                    minWidth: 0,
                   }}
-                />
-              ) : (
-                <MarkdownView content={content} />
+                >
+                  <textarea
+                    value={content}
+                    onChange={(e) => handleContentChange(e.target.value)}
+                    placeholder="여기에 작성하세요. 마크다운을 지원합니다.&#10;&#10;# 제목&#10;**굵게**  *기울임*  ~~취소선~~&#10;- 목록&#10;> 인용"
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      minHeight: 400,
+                      background: "transparent",
+                      border: "none",
+                      outline: "none",
+                      color: "#dbdee1",
+                      fontSize: 15,
+                      lineHeight: 1.6,
+                      resize: "none",
+                      fontFamily: "ui-monospace, Consolas, monospace",
+                    }}
+                  />
+                </div>
+              )}
+              {(mode === "split" || mode === "preview") && (
+                <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px", minWidth: 0 }}>
+                  <MarkdownView content={content} />
+                </div>
               )}
             </div>
           </>
@@ -2300,6 +2322,218 @@ function DocsView({ currentUser, serverName }) {
   );
 }
 
+// ---------- 사용법 안내 ----------
+const GUIDE_SECTIONS = [
+  {
+    title: "글자 꾸미기",
+    items: [
+      ["**굵게**", "굵은 글씨"],
+      ["*기울임*", "기울인 글씨"],
+      ["***굵은기울임***", "둘 다"],
+      ["~~취소선~~", "가운데 줄"],
+      ["==형광펜==", "노란 배경 강조"],
+      ["`코드`", "인라인 코드"],
+    ],
+  },
+  {
+    title: "구조",
+    items: [
+      ["# 제목", "제목 (# ~ ###### 6단계)"],
+      ["- 항목", "글머리 목록"],
+      ["1. 항목", "번호 목록"],
+      ["- [ ] 할일", "체크박스 (완료는 [x])"],
+      ["> 인용", "인용문"],
+      ["---", "구분선"],
+      ["| a | b |", "표 (다음 줄에 |---|---| 필요)"],
+    ],
+  },
+  {
+    title: "링크 · 이미지",
+    items: [
+      ["[글자](주소)", "링크 걸기"],
+      ["이미지 주소 붙여넣기", "바로 사진으로 표시됨"],
+      ["![설명](이미지주소)", "이미지 삽입"],
+    ],
+  },
+  {
+    title: "채팅 전용",
+    items: [
+      ["<가릴내용>", "스포일러 (클릭하면 열림)"],
+      ["Tab 누르고 있기", "스포일러 전부 잠깐 보기"],
+      ["@이름", "멘션 (목록에서 선택)"],
+      [":하트", "이모지 검색 (한글·영어 둘 다)"],
+      ["/", "명령어 목록 보기"],
+      ["↩️ 버튼", "메시지에 답글 달기"],
+      ["📎 버튼", "사진 첨부 (스포일러 가능)"],
+    ],
+  },
+];
+
+function GuideModal({ onClose }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 70,
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+      }}
+    >
+      <div
+        style={{
+          background: "#313338",
+          borderRadius: 8,
+          width: 560,
+          maxWidth: "92vw",
+          maxHeight: "85vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
+        }}
+      >
+        <div style={{ padding: "20px 24px 14px", borderBottom: "1px solid #26272b" }}>
+          <div style={{ color: "#fff", fontSize: 18, fontWeight: 700 }}>사용법</div>
+          <div style={{ color: "#949ba4", fontSize: 13, marginTop: 4 }}>
+            채팅과 공유 문서에서 쓸 수 있는 문법이에요.
+          </div>
+        </div>
+
+        <div style={{ overflowY: "auto", padding: "16px 24px", flex: 1 }}>
+          {GUIDE_SECTIONS.map((sec) => (
+            <div key={sec.title} style={{ marginBottom: 20 }}>
+              <div
+                style={{
+                  color: "#faa61a",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  marginBottom: 8,
+                }}
+              >
+                {sec.title}
+              </div>
+              {sec.items.map(([syntax, desc]) => (
+                <div
+                  key={syntax}
+                  style={{ display: "flex", gap: 12, marginBottom: 6, fontSize: 13 }}
+                >
+                  <code
+                    style={{
+                      color: "#00a8fc",
+                      background: "#1e1f22",
+                      padding: "2px 7px",
+                      borderRadius: 4,
+                      minWidth: 150,
+                      fontFamily: "ui-monospace, Consolas, monospace",
+                    }}
+                  >
+                    {syntax}
+                  </code>
+                  <span style={{ color: "#b5bac1", paddingTop: 2 }}>{desc}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ padding: "14px 24px", borderTop: "1px solid #26272b" }}>
+          <button
+            onClick={onClose}
+            style={{
+              width: "100%",
+              padding: "10px 0",
+              borderRadius: 4,
+              border: "none",
+              background: "#4e5058",
+              color: "#fff",
+              fontWeight: 600,
+              fontSize: 14,
+              cursor: "pointer",
+            }}
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- 서버 레일 아이콘 ----------
+function ServerIcon({ active, activeColor, title, onClick, children }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+      {/* 활성/호버 표시 막대 */}
+      <div
+        style={{
+          position: "absolute",
+          left: -12,
+          width: 4,
+          height: active ? 32 : hover ? 18 : 0,
+          background: "#fff",
+          borderRadius: "0 4px 4px 0",
+          transition: "height 0.15s",
+        }}
+      />
+      <div
+        onClick={onClick}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        title={title}
+        style={{
+          width: 48,
+          height: 48,
+          borderRadius: active || hover ? 16 : 24,
+          background: active ? activeColor : hover ? activeColor : "#313338",
+          color: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontWeight: 700,
+          fontSize: 18,
+          cursor: "pointer",
+          transition: "border-radius 0.15s, background 0.15s",
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ---------- 게임 뷰 ----------
+function GameView() {
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: "#313338" }}>
+      <div
+        style={{
+          height: 48,
+          display: "flex",
+          alignItems: "center",
+          padding: "0 16px",
+          borderBottom: "1px solid #26272b",
+          color: "#fff",
+          fontWeight: 700,
+          fontSize: 15,
+          flexShrink: 0,
+        }}
+      >
+        🐍 스네이크 게임
+      </div>
+      <iframe
+        src="/snake.html"
+        title="Snake Game"
+        style={{ flex: 1, width: "100%", border: "none", background: "#111" }}
+      />
+    </div>
+  );
+}
+
 // ---------- 메인 디스코드 스타일 채팅 ----------
 function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmin }) {
   const [channels, setChannels] = useState([]);
@@ -2307,6 +2541,10 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   const [showAdmin, setShowAdmin] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
+
+  // Tab 키를 누르고 있는 동안 스포일러 전체 보기
+  useTabRevealSpoilers();
   const [currentView, setCurrentView] = useState("chat"); // "chat" | "docs"
   const [profileMap, setProfileMap] = useState({}); // { 원래이름: { nickname, avatar_color } }
   const [input, setInput] = useState("");
@@ -2653,14 +2891,14 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
     // "/" 로 시작하면 명령어 도움말
     setShowHelp(value.startsWith("/"));
 
-    // "::검색어" 이모지 자동완성
-    const emojiMatch = value.match(/::([\w가-힣]*)$/);
+    // ":검색어" 이모지 자동완성 (:heart: 형식)
+    const emojiMatch = value.match(/(?:^|\s):([\w가-힣]{1,20})$/);
     if (emojiMatch) {
       const q = emojiMatch[1].toLowerCase();
-      const list = EMOJI_LIST.filter(
-        (e) => q === "" || e.names.some((n) => n.toLowerCase().includes(q))
+      const list = EMOJI_LIST.filter((e) =>
+        e.names.some((n) => n.toLowerCase().includes(q))
       ).slice(0, 24);
-      setEmojiSuggest({ query: emojiMatch[1], list });
+      setEmojiSuggest(list.length > 0 ? { query: emojiMatch[1], list } : null);
     } else {
       setEmojiSuggest(null);
     }
@@ -2679,7 +2917,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
   }
 
   function insertEmoji(emoji) {
-    setInput((prev) => prev.replace(/::[\w가-힣]*$/, emoji));
+    setInput((prev) => prev.replace(/:[\w가-힣]{1,20}$/, emoji));
     setEmojiSuggest(null);
   }
 
@@ -2809,50 +3047,49 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
           flexShrink: 0,
         }}
       >
-        <div
-          onClick={() => setCurrentView("chat")}
+        <ServerIcon
+          active={currentView === "chat"}
+          activeColor="#5865F2"
           title={serverName}
-          style={{
-            width: 48,
-            height: 48,
-            borderRadius: currentView === "chat" ? 16 : 24,
-            background: currentView === "chat" ? "#5865F2" : "#313338",
-            color: "#fff",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontWeight: 700,
-            fontSize: 18,
-            cursor: "pointer",
-            transition: "border-radius 0.15s, background 0.15s",
-          }}
+          onClick={() => setCurrentView("chat")}
         >
           {serverName?.trim()?.[0] || "?"}
-        </div>
+        </ServerIcon>
 
-        <div
-          onClick={() => setCurrentView("docs")}
+        <ServerIcon
+          active={currentView === "docs"}
+          activeColor="#248046"
           title="공유 문서"
-          style={{
-            width: 48,
-            height: 48,
-            borderRadius: currentView === "docs" ? 16 : 24,
-            background: currentView === "docs" ? "#248046" : "#313338",
-            color: "#fff",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 22,
-            cursor: "pointer",
-            transition: "border-radius 0.15s, background 0.15s",
-          }}
+          onClick={() => setCurrentView("docs")}
         >
-          📄
-        </div>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="8" y1="13" x2="16" y2="13" />
+            <line x1="8" y1="17" x2="13" y2="17" />
+          </svg>
+        </ServerIcon>
+
+        <ServerIcon
+          active={currentView === "game"}
+          activeColor="#c2410c"
+          title="스네이크 게임"
+          onClick={() => setCurrentView("game")}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="2" y="6" width="20" height="12" rx="3" />
+            <line x1="7" y1="12" x2="11" y2="12" />
+            <line x1="9" y1="10" x2="9" y2="14" />
+            <circle cx="16" cy="11" r="1" fill="currentColor" />
+            <circle cx="18.5" cy="13.5" r="1" fill="currentColor" />
+          </svg>
+        </ServerIcon>
       </div>
 
       {currentView === "docs" ? (
         <DocsView currentUser={currentUser} serverName="공유 문서" />
+      ) : currentView === "game" ? (
+        <GameView />
       ) : (
       <>
       {/* 채널 목록 */}
@@ -2950,11 +3187,11 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
 
         <StorageGauge usageBytes={storageUsage} />
 
-        <div style={{ padding: "8px 8px 0" }}>
+        <div style={{ padding: "8px 8px 0", display: "flex", gap: 6 }}>
           <button
-            onClick={() => setShowPasswordModal(true)}
+            onClick={() => setShowGuide(true)}
             style={{
-              width: "100%",
+              flex: 1,
               padding: "9px 0",
               borderRadius: 4,
               border: "none",
@@ -2965,7 +3202,23 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
               cursor: "pointer",
             }}
           >
-            🔑 비밀번호 설정
+            📖 사용법
+          </button>
+          <button
+            onClick={() => setShowPasswordModal(true)}
+            style={{
+              flex: 1,
+              padding: "9px 0",
+              borderRadius: 4,
+              border: "none",
+              background: "#3f4147",
+              color: "#dbdee1",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            🔑 비밀번호
           </button>
         </div>
 
@@ -3031,6 +3284,8 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
           onClose={() => setShowProfile(false)}
         />
       )}
+
+      {showGuide && <GuideModal onClose={() => setShowGuide(false)} />}
 
       {showPasswordModal && (
         <PasswordSettingsModal
@@ -3192,7 +3447,6 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                     (m.image_spoiler ? (
                       <SpoilerImage
                         src={m.image_url}
-                        spoilerKey={`img-${m.id}`}
                         onOpen={() => {
                           if (idx === messages.length - 1 && isNearBottomRef.current) {
                             scrollToBottom(false);
