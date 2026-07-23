@@ -1578,166 +1578,303 @@ function SpoilerText({ spoilerKey, children }) {
   );
 }
 
-// 메시지 본문을 렌더링 (`스포일러` 문법 처리)
+// 메시지 본문 렌더링 (마크다운 + `스포일러` 처리)
 function MessageBody({ text, messageId }) {
-  // `...` 를 스포일러로 분리
-  const parts = [];
-  const regex = /`([^`]+?)`/g;
-  let lastIndex = 0;
-  let match;
-  let spoilerIdx = 0;
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push({ type: "text", value: text.slice(lastIndex, match.index) });
-    }
-    parts.push({ type: "spoiler", value: match[1], key: `${messageId}-${spoilerIdx++}` });
-    lastIndex = regex.lastIndex;
-  }
-  if (lastIndex < text.length) {
-    parts.push({ type: "text", value: text.slice(lastIndex) });
-  }
+  const ref = useRef(null);
 
-  return (
-    <>
-      {parts.map((p, i) =>
-        p.type === "spoiler" ? (
-          <SpoilerText key={i} spoilerKey={p.key}>
-            {p.value}
-          </SpoilerText>
-        ) : (
-          <span key={i}>{p.value}</span>
-        )
-      )}
-    </>
-  );
+  const html = markdownToHtml(text, {
+    backtickAsSpoiler: true,
+    keyPrefix: `msg${messageId}`,
+  });
+
+  // 이미 열어본 스포일러는 처음부터 보이게, 클릭하면 열리게
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const opened = getOpenedSpoilers();
+
+    function reveal(node) {
+      node.style.background = "rgba(255,255,255,0.06)";
+      node.style.color = "inherit";
+      node.style.boxShadow = "none";
+      node.style.cursor = "auto";
+      node.style.userSelect = "auto";
+    }
+
+    el.querySelectorAll("[data-spoiler]").forEach((node) => {
+      if (opened[node.dataset.spoiler]) reveal(node);
+    });
+
+    function onClick(e) {
+      const node = e.target.closest?.("[data-spoiler]");
+      if (!node || !el.contains(node)) return;
+      const key = node.dataset.spoiler;
+      if (opened[key]) return;
+      markSpoilerOpened(key);
+      opened[key] = true;
+      reveal(node);
+    }
+
+    el.addEventListener("click", onClick);
+    return () => el.removeEventListener("click", onClick);
+  }, [html]);
+
+  return <div ref={ref} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-// ---------- 간단한 마크다운 렌더러 ----------
+
+// ---------- 마크다운 렌더러 ----------
 function escapeHtml(s) {
   return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
-// 한 줄 안의 인라인 서식 (굵게/기울임/코드/링크)
-function renderInline(text) {
-  let t = escapeHtml(text);
-  // 인라인 코드 `code`
-  t = t.replace(/`([^`]+)`/g, '<code style="background:#1e1f22;padding:1px 5px;border-radius:3px;font-family:monospace;font-size:0.9em">$1</code>');
-  // 굵게 **bold**
-  t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  // 기울임 *italic*
-  t = t.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-  // 취소선 ~~text~~
-  t = t.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+// 인라인 서식 처리
+// opts.backtickAsSpoiler: true면 `내용`을 스포일러로, false면 코드로 처리
+function renderInline(text, opts = {}) {
+  const { backtickAsSpoiler = false, keyPrefix = "s" } = opts;
+
+  // 코드/스포일러 안의 내용은 다른 서식이 적용되면 안 되므로 먼저 빼둠
+  const holds = [];
+  let t = text;
+
+  // 코드블록 안전장치: 백틱 구간 추출
+  t = t.replace(/`([^`]+)`/g, (_, code) => {
+    const i = holds.length;
+    if (backtickAsSpoiler) {
+      holds.push(
+        `<span data-spoiler="${keyPrefix}-${i}" style="background:#1a1b1e;color:transparent;border-radius:3px;padding:0 4px;cursor:pointer;user-select:none;box-shadow:inset 0 0 0 1px #111214">${escapeHtml(
+          code
+        )}</span>`
+      );
+    } else {
+      holds.push(
+        `<code style="background:#1e1f22;padding:1px 5px;border-radius:3px;font-family:ui-monospace,Consolas,monospace;font-size:0.9em">${escapeHtml(
+          code
+        )}</code>`
+      );
+    }
+    return `\u0000HOLD${i}\u0000`;
+  });
+
+  t = escapeHtml(t);
+
+  // 이미지 ![alt](url) — 링크보다 먼저
+  t = t.replace(
+    /!\[([^\]]*)\]\(([^)\s]+)\)/g,
+    '<img src="$2" alt="$1" style="max-width:100%;border-radius:6px;margin:4px 0" />'
+  );
   // 링크 [text](url)
   t = t.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    '<a href="$2" target="_blank" style="color:#00a8fc">$1</a>'
+    /\[([^\]]+)\]\(([^)\s]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:#00a8fc;text-decoration:none">$1</a>'
   );
+  // 자동 링크 <http://...> 및 맨 URL
+  t = t.replace(
+    /(^|[\s(])(https?:\/\/[^\s<)]+)/g,
+    '$1<a href="$2" target="_blank" rel="noopener noreferrer" style="color:#00a8fc;text-decoration:none">$2</a>'
+  );
+
+  // 굵은 기울임 ***text*** / ___text___
+  t = t.replace(/\*\*\*([^*]+)\*\*\*/g, "<strong><em>$1</em></strong>");
+  t = t.replace(/___([^_]+)___/g, "<strong><em>$1</em></strong>");
+  // 굵게 **text** / __text__
+  t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  t = t.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  // 기울임 *text* / _text_
+  t = t.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+  t = t.replace(/(^|[\s(])_([^_\n]+)_/g, "$1<em>$2</em>");
+  // 취소선 ~~text~~
+  t = t.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  // 하이라이트 ==text==
+  t = t.replace(
+    /==([^=]+)==/g,
+    '<mark style="background:#faa61a;color:#1e1f22;padding:0 3px;border-radius:2px">$1</mark>'
+  );
+
+  // 빼둔 코드/스포일러 복원
+  t = t.replace(/\u0000HOLD(\d+)\u0000/g, (_, i) => holds[Number(i)]);
   return t;
 }
 
-// 마크다운 전체를 HTML 문자열로 변환
-function markdownToHtml(md) {
+// 마크다운 전체 → HTML
+// opts.backtickAsSpoiler: 채팅에서는 백틱을 스포일러로 처리
+function markdownToHtml(md, opts = {}) {
   const lines = (md || "").split("\n");
-  const html = [];
-  let inList = false;
-  let inCode = false;
-  let codeBuffer = [];
+  const out = [];
+  let i = 0;
+  let spoilerCounter = 0;
 
-  function closeList() {
-    if (inList) {
-      html.push("</ul>");
-      inList = false;
-    }
+  function inline(text) {
+    const html = renderInline(text, {
+      ...opts,
+      keyPrefix: `${opts.keyPrefix || "s"}-${spoilerCounter++}`,
+    });
+    return html;
   }
 
-  for (const line of lines) {
-    // 코드 블록 ```
-    if (line.trim().startsWith("```")) {
-      if (inCode) {
-        html.push(
-          `<pre style="background:#1e1f22;padding:12px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px">${escapeHtml(
-            codeBuffer.join("\n")
-          )}</pre>`
-        );
-        codeBuffer = [];
-        inCode = false;
-      } else {
-        closeList();
-        inCode = true;
-      }
-      continue;
-    }
-    if (inCode) {
-      codeBuffer.push(line);
-      continue;
-    }
+  while (i < lines.length) {
+    const line = lines[i];
 
-    // 제목
-    const h = line.match(/^(#{1,3})\s+(.*)$/);
-    if (h) {
-      closeList();
-      const level = h[1].length;
-      const sizes = { 1: "1.6em", 2: "1.3em", 3: "1.1em" };
-      html.push(
-        `<div style="font-size:${sizes[level]};font-weight:700;margin:14px 0 6px;color:#fff">${renderInline(
-          h[2]
-        )}</div>`
+    // 코드 블록 ```lang
+    const fence = line.match(/^\s*```(\w*)\s*$/);
+    if (fence) {
+      const lang = fence[1];
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
+        buf.push(lines[i]);
+        i++;
+      }
+      i++; // 닫는 ``` 건너뜀
+      out.push(
+        `<pre style="background:#1e1f22;padding:12px 14px;border-radius:6px;overflow-x:auto;margin:8px 0"><code style="font-family:ui-monospace,Consolas,monospace;font-size:13px;color:#dbdee1">${escapeHtml(
+          buf.join("\n")
+        )}</code></pre>` + (lang ? "" : "")
       );
       continue;
     }
 
-    // 리스트
-    const li = line.match(/^\s*[-*]\s+(.*)$/);
-    if (li) {
-      if (!inList) {
-        html.push('<ul style="margin:4px 0;padding-left:22px">');
-        inList = true;
+    // 표 (| a | b | 다음 줄이 |---|---|)
+    if (
+      /^\s*\|.*\|\s*$/.test(line) &&
+      i + 1 < lines.length &&
+      /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1]) &&
+      lines[i + 1].includes("-")
+    ) {
+      const parseRow = (r) =>
+        r
+          .trim()
+          .replace(/^\||\|$/g, "")
+          .split("|")
+          .map((c) => c.trim());
+      const headers = parseRow(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+        rows.push(parseRow(lines[i]));
+        i++;
       }
-      html.push(`<li style="margin:2px 0">${renderInline(li[1])}</li>`);
+      const th = headers
+        .map(
+          (h) =>
+            `<th style="border:1px solid #3f4147;padding:6px 10px;background:#2b2d31;text-align:left">${inline(
+              h
+            )}</th>`
+        )
+        .join("");
+      const tb = rows
+        .map(
+          (r) =>
+            "<tr>" +
+            r
+              .map(
+                (c) =>
+                  `<td style="border:1px solid #3f4147;padding:6px 10px">${inline(c)}</td>`
+              )
+              .join("") +
+            "</tr>"
+        )
+        .join("");
+      out.push(
+        `<table style="border-collapse:collapse;margin:8px 0;font-size:14px"><thead><tr>${th}</tr></thead><tbody>${tb}</tbody></table>`
+      );
       continue;
     }
 
-    closeList();
+    // 제목 # ~ ######
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      const level = h[1].length;
+      const sizes = { 1: "1.7em", 2: "1.4em", 3: "1.2em", 4: "1.05em", 5: "0.95em", 6: "0.85em" };
+      const border =
+        level <= 2 ? "border-bottom:1px solid #3f4147;padding-bottom:4px;" : "";
+      out.push(
+        `<div style="font-size:${sizes[level]};font-weight:700;margin:16px 0 6px;color:#fff;${border}">${inline(
+          h[2]
+        )}</div>`
+      );
+      i++;
+      continue;
+    }
 
-    // 인용
-    const quote = line.match(/^>\s+(.*)$/);
-    if (quote) {
-      html.push(
-        `<blockquote style="border-left:3px solid #4e5058;margin:6px 0;padding:2px 12px;color:#b5bac1">${renderInline(
-          quote[1]
+    // 구분선 --- *** ___
+    if (/^\s*([-*_])\s*\1\s*\1[\s\S]*$/.test(line) && /^[\s\-*_]+$/.test(line)) {
+      out.push('<hr style="border:none;border-top:1px solid #3f4147;margin:14px 0" />');
+      i++;
+      continue;
+    }
+
+    // 인용문 >
+    if (/^\s*>\s?/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        buf.push(lines[i].replace(/^\s*>\s?/, ""));
+        i++;
+      }
+      out.push(
+        `<blockquote style="border-left:4px solid #4e5058;margin:8px 0;padding:4px 14px;color:#b5bac1">${markdownToHtml(
+          buf.join("\n"),
+          opts
         )}</blockquote>`
       );
       continue;
     }
 
-    // 구분선
-    if (line.trim() === "---") {
-      html.push('<hr style="border:none;border-top:1px solid #3f4147;margin:12px 0" />');
+    // 체크리스트 / 목록 (중첩 지원)
+    if (/^(\s*)([-*+]|\d+\.)\s+/.test(line)) {
+      const items = [];
+      const ordered = /^\s*\d+\./.test(line);
+      const baseIndent = line.match(/^(\s*)/)[1].length;
+      while (i < lines.length && /^(\s*)([-*+]|\d+\.)\s+/.test(lines[i])) {
+        const m = lines[i].match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+        const indent = m[1].length;
+        if (indent < baseIndent) break;
+        let text = m[3];
+        // 체크박스
+        const task = text.match(/^\[([ xX])\]\s+(.*)$/);
+        if (task) {
+          const checked = task[1].toLowerCase() === "x";
+          text = `<span style="color:${checked ? "#3ba55d" : "#949ba4"}">${
+            checked ? "☑" : "☐"
+          }</span> ${inline(task[2])}`;
+        } else {
+          text = inline(text);
+        }
+        items.push(
+          `<li style="margin:3px 0;margin-left:${(indent - baseIndent) * 16}px">${text}</li>`
+        );
+        i++;
+      }
+      const tag = ordered ? "ol" : "ul";
+      out.push(
+        `<${tag} style="margin:6px 0;padding-left:22px;line-height:1.6">${items.join("")}</${tag}>`
+      );
       continue;
     }
 
     // 빈 줄
     if (line.trim() === "") {
-      html.push('<div style="height:8px"></div>');
+      out.push('<div style="height:8px"></div>');
+      i++;
       continue;
     }
 
     // 일반 문단
-    html.push(`<div style="margin:2px 0;line-height:1.6">${renderInline(line)}</div>`);
+    out.push(`<div style="margin:2px 0;line-height:1.6">${inline(line)}</div>`);
+    i++;
   }
 
-  closeList();
-  return html.join("");
+  return out.join("");
 }
 
 function MarkdownView({ content }) {
   return (
     <div
-      style={{ color: "#dbdee1", fontSize: 15 }}
+      style={{ color: "#dbdee1", fontSize: 15, wordBreak: "break-word" }}
       dangerouslySetInnerHTML={{ __html: markdownToHtml(content) }}
     />
   );
@@ -2787,7 +2924,7 @@ function ChatMain({ currentUser, currentCode, nickname, onNicknameChange, isAdmi
                     </div>
                   )}
                   {m.text && (
-                    <div style={{ color: "#dbdee1", fontSize: 15, marginTop: isGrouped ? 0 : 2, wordBreak: "break-word", whiteSpace: "pre-wrap" }}>
+                    <div style={{ color: "#dbdee1", fontSize: 15, marginTop: isGrouped ? 0 : 2, wordBreak: "break-word" }}>
                       <MessageBody text={m.text} messageId={m.id} />
                     </div>
                   )}
