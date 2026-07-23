@@ -285,10 +285,98 @@
   .rank-row.top1 .rank-num { color: #f1c40f; }
   .rank-empty { color: #555; font-size: 13px; text-align: center; padding: 10px 0; }
   .save-status { font-size: 12px; color: #777; margin-top: 8px; }
+  .cheat-panel {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    width: 210px;
+    background: rgba(20,20,22,0.96);
+    border: 1px solid #7d3c98;
+    border-radius: 6px;
+    padding: 12px 14px;
+    text-align: left;
+    z-index: 999;
+    font-size: 12px;
+  }
+  .cheat-title {
+    color: #bb8fce;
+    font-size: 11px;
+    letter-spacing: 2px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .cheat-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 7px;
+    color: #ccc;
+  }
+  .cheat-row input[type="number"] {
+    width: 62px;
+    background: #1c1c1c;
+    border: 1px solid #444;
+    color: #eee;
+    font-family: inherit;
+    font-size: 12px;
+    padding: 3px 5px;
+  }
+  .cheat-btn {
+    background: #4a235a;
+    border: 1px solid #7d3c98;
+    color: #d7bde2;
+    font-family: inherit;
+    font-size: 11px;
+    padding: 4px 8px;
+    cursor: pointer;
+  }
+  .cheat-btn:hover { background: #6c3483; }
+  .cheat-toggle { cursor: pointer; user-select: none; }
+  .cheat-toggle.on { color: #2ecc40; }
+  .cheat-toggle.off { color: #666; }
+  .cheat-hint { color: #666; font-size: 10px; margin-top: 8px; line-height: 1.5; }
 
 </style>
 </head>
 <body>
+
+<div class="cheat-panel" id="cheatPanel" style="display:none">
+  <div class="cheat-title">
+    <span>ADMIN</span>
+    <span class="cheat-btn" id="cheatHide">숨기기</span>
+  </div>
+  <div class="cheat-row">
+    <span>벽 통과</span>
+    <span class="cheat-toggle off" id="cheatWall">OFF</span>
+  </div>
+  <div class="cheat-row">
+    <span>몸통 통과</span>
+    <span class="cheat-toggle off" id="cheatBody">OFF</span>
+  </div>
+  <div class="cheat-row">
+    <span>무적</span>
+    <span class="cheat-toggle off" id="cheatGod">OFF</span>
+  </div>
+  <div class="cheat-row">
+    <span>속도(ms)</span>
+    <input type="number" id="cheatSpeed" min="5" max="400" step="5" value="120" />
+  </div>
+  <div class="cheat-row">
+    <span>점수</span>
+    <input type="number" id="cheatScore" min="0" step="1" value="0" />
+  </div>
+  <div class="cheat-row">
+    <span>길이 +10</span>
+    <span class="cheat-btn" id="cheatGrow">추가</span>
+  </div>
+  <div class="cheat-hint">
+    F2: 패널 열기/닫기<br />
+    치트로 낸 기록은 랭킹에 올라가지 않습니다.
+  </div>
+</div>
 
 <div class="wrap">
   <div class="menu" id="menu">
@@ -436,6 +524,68 @@ loadRanking();
 </script>
 
 <script>
+// ---------- 관리자 치트 ----------
+const IS_ADMIN = new URLSearchParams(location.search).get("admin") === "1";
+const CHEAT = { wall: false, body: false, god: false, used: false };
+window.CHEAT = CHEAT; // 다른 스크립트 블록(랭킹 등록)에서도 참조
+
+function setupCheatPanel() {
+  if (!IS_ADMIN) return;
+  const panel = document.getElementById("cheatPanel");
+  panel.style.display = "block";
+
+  function bindToggle(id, key) {
+    const el = document.getElementById(id);
+    el.addEventListener("click", () => {
+      CHEAT[key] = !CHEAT[key];
+      CHEAT.used = true;
+      el.textContent = CHEAT[key] ? "ON" : "OFF";
+      el.className = "cheat-toggle " + (CHEAT[key] ? "on" : "off");
+    });
+  }
+  bindToggle("cheatWall", "wall");
+  bindToggle("cheatBody", "body");
+  bindToggle("cheatGod", "god");
+
+  // 속도 직접 조절
+  document.getElementById("cheatSpeed").addEventListener("change", (e) => {
+    const v = Math.max(5, Math.min(400, Number(e.target.value) || 120));
+    speed = v;
+    CHEAT.used = true;
+    updateSpeedTag();
+    if (!gameOver && !paused) {
+      stopLoop();
+      loopId = setInterval(tick, speed);
+    }
+  });
+
+  // 점수 직접 수정
+  document.getElementById("cheatScore").addEventListener("change", (e) => {
+    score = Math.max(0, Number(e.target.value) || 0);
+    CHEAT.used = true;
+    updateTopbar();
+  });
+
+  // 길이 늘리기
+  document.getElementById("cheatGrow").addEventListener("click", () => {
+    CHEAT.used = true;
+    const tail = snake[snake.length - 1];
+    for (let i = 0; i < 10; i++) snake.push({ x: tail.x, y: tail.y });
+  });
+
+  document.getElementById("cheatHide").addEventListener("click", () => {
+    panel.style.display = "none";
+  });
+
+  // F2로 패널 열고 닫기
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "F2") {
+      e.preventDefault();
+      panel.style.display = panel.style.display === "none" ? "block" : "none";
+    }
+  });
+}
+
 const MODES = {
   hardcore: { speed: 120, wrap: false, rampAmount: 4, cols: 20, rows: 10, event: false },
 };
@@ -612,15 +762,17 @@ function tick() {
   }
   let head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
 
-  if (selectedMode.wrap) {
+  if (selectedMode.wrap || CHEAT.wall) {
     head.x = (head.x + COLS) % COLS;
     head.y = (head.y + ROWS) % ROWS;
   } else if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS) {
-    return endGame();
+    if (!CHEAT.god) return endGame();
+    head.x = (head.x + COLS) % COLS;
+    head.y = (head.y + ROWS) % ROWS;
   }
 
-  if (snake.some(s => s.x === head.x && s.y === head.y)) return endGame();
-  if (obstacles.some(o => o.x === head.x && o.y === head.y)) return endGame();
+  if (!CHEAT.body && !CHEAT.god && snake.some(s => s.x === head.x && s.y === head.y)) return endGame();
+  if (!CHEAT.god && obstacles.some(o => o.x === head.x && o.y === head.y)) return endGame();
 
   snake.unshift(head);
 
@@ -798,6 +950,7 @@ canvas.addEventListener('touchend', (e) => {
   }
   queueDir(nd);
 }, { passive: true });
+setupCheatPanel();
 </script>
 </body>
 </html>
