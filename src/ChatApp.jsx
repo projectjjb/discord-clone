@@ -1782,7 +1782,7 @@ function renderInline(text, opts = {}) {
   // 이미지 ![alt](url) — 링크보다 먼저
   t = t.replace(
     /!\[([^\]]*)\]\(([^)\s]+)\)/g,
-    '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;margin:4px 0;display:block" />'
+    '<img src="$2" alt="$1" referrerpolicy="no-referrer" loading="lazy" style="max-width:100%;border-radius:8px;margin:4px 0;display:block" />'
   );
   // 링크 [text](url)
   t = t.replace(
@@ -1791,17 +1791,46 @@ function renderInline(text, opts = {}) {
   );
   // 그냥 붙여넣은 URL 처리
   //  - 이미지/GIF 주소면 바로 미리보기로 렌더링
-  //  - 그 외에는 클릭 가능한 링크로
-  t = t.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (full, pre, url) => {
-    const isImage = /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?[^\s]*)?$/i.test(url);
-    const isGifHost = /(tenor\.com|giphy\.com|gfycat\.com)\/[^\s]*/i.test(url);
-    if (isImage) {
-      return `${pre}<img src="${url}" alt="이미지" style="max-width:100%;max-height:420px;border-radius:8px;margin:4px 0;display:block" />`;
+  //  - Giphy/Tenor 페이지 주소는 직접 이미지 주소로 변환 시도
+  //  - 로딩에 실패하면 자동으로 링크로 대체
+  t = t.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (full, pre, rawUrl) => {
+    // 뒤에 붙은 문장부호 제거
+    const trailing = rawUrl.match(/[.,!?)]+$/)?.[0] || "";
+    const url = trailing ? rawUrl.slice(0, -trailing.length) : rawUrl;
+
+    const linkHtml = `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#00a8fc;text-decoration:none">${url}</a>`;
+
+    // 확장자로 판단되는 직접 이미지 주소
+    let imageUrl = null;
+    if (/\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?[^\s]*)?$/i.test(url)) {
+      imageUrl = url;
     }
-    if (isGifHost) {
-      return `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#00a8fc;text-decoration:none">${url}</a>`;
+
+    // Giphy 페이지 주소 → 직접 GIF 주소로 변환
+    // 예: https://giphy.com/gifs/funny-cat-AbC123 → https://i.giphy.com/AbC123.gif
+    if (!imageUrl) {
+      const giphy = url.match(/giphy\.com\/(?:gifs|clips)\/(?:[\w-]*-)?(\w{10,})/i);
+      if (giphy) imageUrl = `https://i.giphy.com/${giphy[1]}.gif`;
     }
-    return `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#00a8fc;text-decoration:none">${url}</a>`;
+
+    // Tenor 직접 미디어 주소 (media.tenor.com/...)는 확장자 없이 오는 경우가 있음
+    if (!imageUrl && /media\d*\.tenor\.com\//i.test(url)) {
+      imageUrl = url;
+    }
+
+    if (!imageUrl) return pre + linkHtml + trailing;
+
+    // referrerpolicy: 핫링크 차단(외부 참조 거부)을 우회
+    // onerror: 이미지가 안 뜨면 링크로 자동 대체
+    const fallbackId = "imgfb" + Math.random().toString(36).slice(2, 9);
+    return (
+      pre +
+      `<img src="${imageUrl}" alt="이미지" referrerpolicy="no-referrer" loading="lazy" ` +
+      `onerror="this.style.display='none';var f=document.getElementById('${fallbackId}');if(f)f.style.display='inline';" ` +
+      `style="max-width:100%;max-height:420px;border-radius:8px;margin:4px 0;display:block" />` +
+      `<span id="${fallbackId}" style="display:none">${linkHtml}</span>` +
+      trailing
+    );
   });
 
   // 굵은 기울임 ***text*** / ___text___
